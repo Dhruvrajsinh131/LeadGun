@@ -1,0 +1,21 @@
+{
+  "name": "lead-gun",
+  "version": "1.0.0",
+  "description": "",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "scrape": "node -e \"require('./src/jobs/scrapeJob').runScrapeJob({reason:'cli'})\"",
+    "dev": "PORT=3000 SCRAPE_ON_START=false node src/server.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "dotenv": "^18.0.5",
+    "express": "^4.19.2",
+    "node-cron": "^3.0.3",
+    "playwright": "^1.63.0"
+  }
+}
