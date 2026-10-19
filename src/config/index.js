@@ -25,6 +25,19 @@ const SUBREDDITS = [
 const FOUNDER_SUBS = ["startups", "saas", "sideproject", "smallbusiness", "entrepreneur"];
 
 // Rotated across runs, maxQueriesPerRun at a time.
+const LINKEDIN_QUERIES = [
+  "looking for a developer",
+  "need a developer",
+  "hiring a developer",
+  "looking for a development agency",
+  "need a development team",
+  "build my MVP",
+  "need a website built",
+  "looking for a technical cofounder",
+  "Next.js developer",
+  "Odoo customization",
+];
+
 const X_QUERIES = [
   "looking for a developer",
   "need a developer",
@@ -116,6 +129,22 @@ module.exports = {
     model: "gpt-4o-mini",
     timeoutMs: 30000,
     maxCallsPerRun: 30,
+  },
+  // LinkedIn lead source.
+  linkedin: {
+    enabled: true,
+    queries: LINKEDIN_QUERIES,
+    searchSuffix: "",
+    maxQueriesPerRun: 6,
+    maxPosts: 40,
+    // The SDUI lazy-column loads ~3 posts per batch, so it needs more scrolls.
+    searchScrolls: 14,
+    scrollDelayMs: 1500,
+    interPageDelayMs: 15000,
+    postsFile: "linkedin_posts.json",
+    matchedFile: "linkedin_matched.json",
+    leadsFile: "linkedin_leads.json",
+    notifiedFile: "linkedin_notified.json",
   },
   // X (Twitter) lead source.
   x: {

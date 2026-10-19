@@ -2,15 +2,16 @@
 
 const { runScrapeJob } = require("./jobs/scrapeJob");
 
-const SOURCES = ["reddit", "x"];
+const SOURCES = ["reddit", "x", "linkedin"];
 
 function usage() {
   return [
-    "Usage: npm run scrape [-- --reddit | --x | --all]",
+    "Usage: npm run scrape [-- --reddit | --x | --linkedin | --all]",
     "",
-    "  --reddit   Scrape Reddit only",
-    "  --x        Scrape X (Twitter) only",
-    "  --all      Scrape every source",
+    "  --reddit     Scrape Reddit only",
+    "  --x          Scrape X (Twitter) only",
+    "  --linkedin   Scrape LinkedIn only",
+    "  --all        Scrape every source",
     "",
     "No flags: uses the sources enabled in src/config/index.js.",
   ].join("\n");
@@ -29,9 +30,6 @@ function parseArgs(argv) {
     if (arg === "--all") {
       all = true;
       continue;
-    }
-    if (arg.startsWith("--linkedin")) {
-      throw new Error("--linkedin is not implemented yet (no LinkedIn scraper).");
     }
     const name = arg.startsWith("--") ? arg.slice(2) : "";
     if (SOURCES.includes(name)) {
