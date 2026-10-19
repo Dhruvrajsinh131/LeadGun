@@ -5,7 +5,7 @@ Lead Gun scans Reddit for people who want to hire developers. It checks subreddi
 
 How to use:
 1. Run npm install to install everything
-2. Copy .env.example to .env and fill in your Discord bot token, channel ID, and LLM API key
+2. Copy .env.example to .env and fill in your Discord bot token and LLM API key. All other settings live in src/config/index.js
 3. Run npm start to start the server. It will scrape automatically every 3 hours
-4. Run npm run scrape to scrape once manually without starting server
+4. Run npm run scrape to scrape once manually without starting server (pick sources with npm run scrape -- --reddit, --x or --all)
 5. Check leads at http://localhost:3000/api/leads or on Discord

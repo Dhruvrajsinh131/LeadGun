@@ -10,9 +10,8 @@ async function connectToChrome() {
   if (!context) throw new Error("No browser context found. Is Chrome running with --remote-debugging-port?");
   const page = context.pages()[0] || (await context.newPage());
   console.log("✅ Connected to Chrome");
-  // NOTE: intentionally returns only the page. The browser/context belong
-  // to the user's Chrome instance, so we never close them here.
-  return { page };
+  // Browser/context belong to the user's Chrome — never close them.
+  return { page, context };
 }
 
 module.exports = { connectToChrome };

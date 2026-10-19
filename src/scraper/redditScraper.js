@@ -1,6 +1,7 @@
 "use strict";
 
 const { sleep, random } = require("../utils/humanBehavior");
+const { shuffled, markKnown, isTargetClosed } = require("../utils/scrape");
 const { handleVerification, isHumanCheckVisible, ensurePageReady } = require("../utils/verification");
 const config = require("../config");
 
@@ -8,19 +9,8 @@ function searchUrl(subreddit, query) {
   return `https://www.reddit.com/r/${subreddit}/search/?q=${encodeURIComponent(query)}&restrict_sr=1&sort=${config.searchSort}`;
 }
 
-function shuffled(arr) {
-  const out = [...arr];
-  if (!config.shuffleOrder) return out;
-  for (let i = out.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [out[i], out[j]] = [out[j], out[i]];
-  }
-  return out;
-}
-
 function queriesForSub(subreddit) {
-  // Shuffle BEFORE slicing so long per-sub lists rotate across runs
-  // instead of querying the same first-N every time.
+  // Shuffle before slicing so queries rotate across runs.
   const specific = (config.subredditQueries && config.subredditQueries[subreddit]) || [];
   const pool = [...new Set([...specific, ...config.searchQueries])];
   return shuffled(pool).slice(0, config.maxQueriesPerSub);
@@ -39,9 +29,7 @@ async function openSubreddit(page, subreddit) {
 }
 
 async function collectPrimary(page, subreddit, source) {
-  // NOTE: Reddit upvotes live in `upvotes`, never `score` — `score` is
-  // reserved for the lead verdict (heuristic/LLM). Mixing them once caused
-  // Discord to filter leads by upvote count instead of lead quality.
+  // `upvotes` only — `score` is reserved for the lead verdict.
   const posts = await page.locator("shreddit-post").evaluateAll((elements) =>
     elements.map((post) => ({
       title: post.getAttribute("post-title") || "",
@@ -125,15 +113,24 @@ async function scrollToLoadAll(page, subreddit, source, maxScrolls) {
     } else {
       stagnant = 0;
     }
-    await page.evaluate(() => window.scrollBy(0, window.innerHeight * 2));
-    await page.waitForTimeout(config.scrollDelayMs);
+    // Mark dead renderer so the job can retry on a fresh tab.
+    try {
+      await page.evaluate(() => window.scrollBy(0, window.innerHeight * 2));
+      await page.waitForTimeout(config.scrollDelayMs);
+    } catch (err) {
+      if (isTargetClosed(err)) {
+        const e = new Error(`Reddit tab closed mid-scroll: ${err.message}`);
+        e.code = "TARGET_CLOSED";
+        throw e;
+      }
+      console.log(`📜 Scroll ${i + 1}/${limit}: scroll/wait failed, continuing`);
+    }
   }
   return [...seen.values()];
 }
 
 async function extractPosts(page, subreddit, source) {
-  // NOTE: no extra sleep here — handleVerification already waits 2s
-  // after the challenge clears.
+  // No extra sleep — handleVerification already waits.
   await handleVerification(page);
   return collectPosts(page, subreddit, source);
 }
@@ -147,22 +144,6 @@ function mergeByUrl(lists) {
     if (!prev || (!prev.content && p.content)) merged.set(key, p);
   }
   return [...merged.values()];
-}
-
-// Freshness: how many of these posts have never been stored before?
-// Counts them and records their URLs so later pages in the same run
-// don't recount them. Returns null when no tracking set is passed.
-function markKnown(posts, known) {
-  if (!known) return null;
-  let n = 0;
-  for (const p of posts) {
-    if (!p.url) continue;
-    if (!known.has(p.url)) {
-      n++;
-      known.add(p.url);
-    }
-  }
-  return n;
 }
 
 async function scrapeSubreddit(page, subreddit, knownUrls) {
@@ -215,4 +196,4 @@ async function scrapeSubredditFull(page, subreddit, knownUrls) {
   return posts;
 }
 
-module.exports = { openSubreddit, scrollToLoadAll, collectPosts, extractPosts, scrapeSubreddit, scrapeSearch, scrapeSubredditFull, searchUrl, queriesForSub, shuffled, postKey, mergeByUrl };
+module.exports = { openSubreddit, scrollToLoadAll, collectPosts, extractPosts, scrapeSubreddit, scrapeSearch, scrapeSubredditFull, searchUrl, queriesForSub, shuffled, postKey, mergeByUrl, isTargetClosed };

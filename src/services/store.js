@@ -13,13 +13,7 @@ function filePath(name) {
   return path.join(config.dataDir, name);
 }
 
-// Canonical identity of a post link for uniqueness checks. Scraped URLs
-// vary cosmetically (trailing slash, utm/query params, #fragments), so
-// raw-string comparison lets the same post through twice. Normalizing
-// (trim, strip query/fragment, drop trailing slashes) makes the
-// notified-record lookup robust. Case is preserved: Reddit comment IDs
-// are case-sensitive.
-// Returns "" for non-URL values (never a valid dedupe key).
+// Dedupe key for post URLs: trims and strips query/fragment/trailing slash.
 function normalizeUrl(value) {
   if (typeof value !== "string") return "";
   let u = value.trim();

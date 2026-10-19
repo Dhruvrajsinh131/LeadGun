@@ -16,10 +16,8 @@ const HUMAN_CHECK_SELECTORS = [
 ];
 
 async function isHumanCheckVisible(page) {
-  // NOTE: count() alone gives false positives — Reddit loads an invisible
-  // reCAPTCHA Enterprise badge on every page and "recaptcha" contains the
-  // substring "captcha", so iframe[src*="captcha"] always matches.
-  // Only a VISIBLE match counts as a real challenge.
+  // Reddit's invisible reCAPTCHA badge matches "captcha" on every page,
+  // so only a visible match counts.
   for (const selector of HUMAN_CHECK_SELECTORS) {
     try {
       const loc = page.locator(selector);
@@ -59,13 +57,10 @@ async function waitForHuman(page, { timeoutMs = config.verifyWaitMs, screenshotP
 
 async function handleVerification(page, opts) {
   if (await waitForHuman(page, opts)) {
-    // Challenge was solved (or was never there) — give Reddit a moment
-    // to hydrate shreddit-post elements.
     await sleep(2000);
     return true;
   }
-  // Timeout path: one reload often turns a challenge interstitial into
-  // a rendered feed.
+  // One reload often clears the interstitial.
   try {
     await page.reload({ waitUntil: "domcontentloaded", timeout: config.navigationTimeoutMs });
     await sleep(2500);

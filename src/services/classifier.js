@@ -16,13 +16,16 @@ const AGENCY_CAPABILITIES = [
 ].join(", ");
 
 function buildPrompt(post) {
-  // Token-frugal by design: title + head of content only (~600 chars is
-  // plenty to judge hiring intent). Verdict capped at ~150 output tokens.
-  const body = `Title: ${post.title || ""}\nSubreddit: r/${post.subreddit || "?"}\nContent: ${(post.content || "").slice(0, 600)}`;
+  const isX = post.platform === "x";
+  const sourceLine = isX
+    ? `X account: @${post.handle || post.author || "?"} (query: "${post.query || "?"}")`
+    : `Subreddit: r/${post.subreddit || "?"}`;
+  const body = `Title: ${post.title || ""}\n${sourceLine}\nContent: ${(post.content || "").slice(0, 600)}`;
+  const postNoun = isX ? "X post" : "Reddit post";
   return [
     "You are a lead qualifier for a software development agency.",
     `Agency capabilities: ${AGENCY_CAPABILITIES}.`,
-    "Decide if this Reddit post is a sales lead: someone who may pay a developer, freelancer, team, or agency.",
+    `Decide if this ${postNoun} is a sales lead: someone who may pay a developer, freelancer, team, or agency.`,
     "Count INDIRECT intent too (e.g. slow backend, scaling pain, Odoo struggles, RAG needs) when professional work is likely required.",
     "Full-time / direct-hire employment listings (e.g. 'Senior Python Engineer, $3000/month', 'we are hiring...') ARE leads: a company hiring engineers may also buy agency, contract, or staff-augmentation services. Score them by project clarity like any hiring post.",
     "Reject tutorials, questions with no project, job seekers offering services, and spam.",
@@ -45,7 +48,7 @@ function safeParseJson(text) {
   }
 }
 
-// $ per 1M tokens [input, output]. Unknown models log tokens without $.
+// $ per 1M tokens [input, output].
 const MODEL_PRICES = {
   "gpt-4o-mini": [0.15, 0.6],
   "gpt-4o": [2.5, 10],
@@ -137,13 +140,8 @@ async function classifyPost(post) {
 }
 
 async function classifyLeads(analyzed, skipUrls = new Set()) {
-  // Token budget: only heuristic leads are judged (never raw scraped
-  // posts), best-first, capped per run. Anything past the cap keeps its
-  // heuristic verdict instead of spending tokens on leads we'd never send.
-  // Matches DISCORD_MAX_LEADS so we judge exactly what we can notify.
-  // Already-notified URLs are never re-judged — tokens go to new leads.
-  // Compared normalized so cosmetic URL variants (trailing slash, utm
-  // params) don't waste calls or slip through twice.
+  // Judge heuristic leads best-first, capped by llm.maxCallsPerRun.
+  // Notified URLs are skipped; the rest keep their heuristic verdict.
   const seenNotified = new Set([...skipUrls].map(normalizeUrl).filter(Boolean));
   const candidates = analyzed
     .filter((p) => p.isLead)
@@ -161,16 +159,11 @@ async function classifyLeads(analyzed, skipUrls = new Set()) {
   if (tail.length > 0 || renotified > 0) {
     console.log(`🧠 LLM budget: judged ${head.length}, kept ${tail.length} on heuristic verdict (cap ${budget}, ${renotified} already notified).`);
   }
-  // Verdict breakdown: heuristic leads the LLM rejected never reach
-  // Discord, so log the counts (e.g. "kept 1, rejected 3") instead of
-  // silently notifying fewer posts than the heuristic found.
+  // Log rejected heuristic leads so they don't vanish silently.
   const llmActive = config.llm.enabled && Boolean(config.llm.apiKey);
   if (llmActive && head.length > 0) {
     const kept = out.filter((p) => p.isLead).length;
     console.log(`🧠 LLM verdict: kept ${kept}, rejected ${head.length - kept} (judged ${head.length}).`);
-    // Name the rejects with the LLM's one-line reason, otherwise a post
-    // the user expected (e.g. "Senior Python Engineer") disappears
-    // silently and the funnel looks broken.
     for (const r of out.filter((p) => !p.isLead).slice(0, 10)) {
       console.log(`   ❌ [${r.heuristicScore}|${(r.capabilities || []).join(", ")}] ${(r.title || "").slice(0, 110)} — ${r.reasoning || "no reason given"}`);
     }

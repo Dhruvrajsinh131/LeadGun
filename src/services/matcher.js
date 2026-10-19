@@ -21,9 +21,8 @@ function extractSignals(post) {
   const content = post.content || "";
   const text = `${title}\n${content}`;
   const directIntent = matchSources(text, config.directIntentPatterns);
-  // RECALL SAFEGUARD: a post explicitly hiring is never auto-excluded by
-  // the soft spam filters (crypto, free-course…). Hard seller/seeker
-  // patterns always apply — they identify non-buyers, not topics.
+  // Hard excludes (sellers/seekers) apply even with direct intent; soft
+  // excludes only when there is no direct intent.
   const hardExcluded = (config.hardExcludePatterns || []).some((re) => re.test(text));
   const excluded = hardExcluded || (directIntent.length === 0 && config.excludePatterns.some((re) => re.test(text)));
   const indirectIntent = excluded ? [] : matchSources(text, config.indirectIntentPatterns);
@@ -42,8 +41,6 @@ function heuristicScore(signals, post = {}) {
   score += Math.min(24, signals.capabilities.length * 8);
   if (signals.capabilityCategories.length > 1) score += Math.min(12, (signals.capabilityCategories.length - 1) * 6);
   if (signals.budgetSignals.length > 0) score += 10;
-  // Founder/problem posts outrank generic tech chatter: someone building a
-  // business is closer to paying than someone asking a question.
   const sub = String(post.subreddit || "").toLowerCase();
   if (signals.directIntent.length > 0 && (config.founderSubs || []).includes(sub)) score += 10;
   return Math.min(100, score);
@@ -56,10 +53,7 @@ function gradeFor(score) {
   return "D";
 }
 
-// Single source of truth for "the" score of a post/lead.
-// Prefers the LLM score when present, falls back to heuristic.
-// Always returns a finite number — stale string scores from old runs
-// (e.g. score:'7') can no longer shadow the real score or break sorts.
+// Prefer the LLM score, fall back to heuristic; always finite.
 function leadScore(lead) {
   for (const v of [lead.score, lead.heuristicScore]) {
     const n = typeof v === "number" ? v : parseInt(v, 10);
@@ -69,22 +63,15 @@ function leadScore(lead) {
 }
 
 function analyzePost(post) {
-  // Strip previous-run verdict fields so a re-analysis is always fresh.
-  // Without this, a stale `score` would survive via the spread below and
-  // shadow the recomputed heuristicScore downstream.
+  // Drop previous verdict fields so a re-analysis is always fresh.
   const { score, grade, classifiedBy, reasoning, budget, llmError, warm, ...fresh } = post;
   const signals = extractSignals(fresh);
   const heuristic = heuristicScore(signals, fresh);
   const hasIntent = signals.directIntent.length > 0 || signals.indirectIntent.length > 0;
   const hasCapability = signals.capabilities.length > 0;
-  // A dev-agency lead needs hiring intent AND at least one capability
-  // keyword (stack, role, or AI mention — generics included, the LLM
-  // rejects non-dev matches downstream).
-  // Keyword-only posts (framework announcements) and intent-only posts
-  // (e.g. hiring a content writer) are not our leads.
+  // Needs hiring intent plus a capability keyword.
   const isLead = !signals.excluded && hasIntent && hasCapability && heuristic >= config.minLeadScore;
-  // Warm = actively buying: direct hiring intent plus a money signal.
-  // These go first in every Discord batch.
+  // Warm = direct intent plus budget signal; sorted first in Discord.
   const isWarm = isLead && signals.directIntent.length > 0 && signals.budgetSignals.length > 0;
   return {
     ...fresh,
