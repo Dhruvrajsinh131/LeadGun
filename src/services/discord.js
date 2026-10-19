@@ -43,9 +43,12 @@ function verifierLabel(classifiedBy) {
 function leadToEmbed(lead) {
   const url = safeUrl(lead.url);
   const isX = lead.platform === "x";
+  const isLinkedIn = lead.platform === "linkedin";
   const origin = isX
     ? `𝕏 @${lead.handle || lead.author || "?"} · ${lead.query ? `"${lead.query}"` : lead.source || "x-search"}`
-    : `📍 r/${lead.subreddit} · ${lead.source || "feed"} · ⬆ ${lead.upvotes ?? 0} · 💬 ${lead.comments ?? 0}`;
+    : isLinkedIn
+      ? `💼 ${lead.handle || lead.author || "?"} · ${lead.query ? `"${lead.query}"` : lead.source || "linkedin-search"}`
+      : `📍 r/${lead.subreddit} · ${lead.source || "feed"} · ⬆ ${lead.upvotes ?? 0} · 💬 ${lead.comments ?? 0}`;
   const lines = [
     origin,
     `🧰 ${(lead.capabilities || []).join(", ") || "general"}`,
@@ -306,4 +309,54 @@ async function notifyXLeads(leads, summary) {
   return { sent: sentLeads.length };
 }
 
-module.exports = { isConfigured, leadToEmbed, notifyLeads, notifyXLeads, buildSummary, buildXSummary, fitPayload, LIMITS };
+function buildLinkedInSummary(fresh, summary) {
+  const reason = RUN_LABELS[summary.reason] || String(summary.reason || "run");
+  const head = `💼 **LinkedIn hunt complete!** Sniffed out **${plural(fresh.length, "fresh lead", "fresh leads")}** from **${plural(summary.scraped, "post", "posts")}** across **${plural(summary.queries.length, "query", "queries")}** · _${reason}_`;
+  const top = fresh.filter((l) => l.grade === "A").length;
+  const hot = fresh.filter((l) => l.warm).length;
+  const extras = [];
+  if (top > 0) extras.push(`🔥 ${plural(top, "A-grade", "A-grade")}`);
+  if (hot > 0) extras.push(`💰 ${plural(hot, "red-hot buyer", "red-hot buyers")}`);
+  return extras.length > 0 ? `${head}\n${extras.join(" · ")}` : head;
+}
+
+// Same as notifyLeads, with the separate linkedin_notified file.
+async function notifyLinkedInLeads(leads, summary) {
+  if (!isConfigured()) {
+    console.log("💬 Discord not configured, skipping LinkedIn notifications.");
+    return { sent: 0, skipped: "not-configured" };
+  }
+  const notifiedFile = (config.linkedin && config.linkedin.notifiedFile) || "linkedin_notified.json";
+  const notified = new Set((await readJson(notifiedFile, [])).map(normalizeUrl).filter(Boolean));
+  const seenThisRun = new Set();
+  const fresh = leads
+    .filter((l) => normalizeUrl(l.url) && scoreOf(l) >= config.discord.minScore)
+    .sort((a, b) => (Number(b.warm) - Number(a.warm)) || (scoreOf(b) - scoreOf(a)))
+    .filter((l) => {
+      const key = normalizeUrl(l.url);
+      if (notified.has(key) || seenThisRun.has(key)) return false;
+      seenThisRun.add(key);
+      return true;
+    })
+    .slice(0, config.discord.maxLeads);
+  if (fresh.length === 0) {
+    console.log("💬 No new LinkedIn leads to notify.");
+    return { sent: 0 };
+  }
+  const batches = [];
+  for (let i = 0; i < fresh.length; i += 5) batches.push(fresh.slice(i, i + 5));
+  const payloads = [
+    { content: buildLinkedInSummary(fresh, summary) },
+    ...batches.map((group) => ({ embeds: group.map(leadToEmbed) })),
+  ];
+  const results = await sendPayloads(payloads);
+  const sentLeads = batches.filter((_, n) => results[n + 1]).flat();
+  if (sentLeads.length > 0) {
+    for (const l of sentLeads) notified.add(normalizeUrl(l.url));
+    await writeJson(notifiedFile, [...notified].slice(-5000));
+  }
+  console.log(`💬 Notified Discord (LinkedIn): ${sentLeads.length}/${fresh.length} lead(s).`);
+  return { sent: sentLeads.length };
+}
+
+module.exports = { isConfigured, leadToEmbed, notifyLeads, notifyXLeads, notifyLinkedInLeads, buildSummary, buildXSummary, buildLinkedInSummary, fitPayload, LIMITS };

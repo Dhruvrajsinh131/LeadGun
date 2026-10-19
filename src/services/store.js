@@ -14,15 +14,18 @@ function filePath(name) {
 }
 
 // Dedupe key for post URLs: trims and strips query/fragment/trailing slash.
+// LinkedIn posts without a permalink carry a unique #post-<hash> marker that
+// is kept, so different posts by the same author stay distinct.
 function normalizeUrl(value) {
   if (typeof value !== "string") return "";
   let u = value.trim();
+  const marker = u.match(/#post-[0-9a-z]+$/i);
   const hash = u.indexOf("#");
   if (hash !== -1) u = u.slice(0, hash);
   const query = u.indexOf("?");
   if (query !== -1) u = u.slice(0, query);
   if (u.length > 1) u = u.replace(/\/+$/, "");
-  return u;
+  return marker ? `${u}${marker[0].toLowerCase()}` : u;
 }
 
 async function readJson(name, fallback) {

@@ -4,10 +4,11 @@ const config = require("../config");
 const { connectToChrome } = require("../browser/connection");
 const { scrapeSubredditFull, shuffled, isTargetClosed: isRedditTargetClosed } = require("../scraper/redditScraper");
 const { scrapeXFull, isTargetClosed: isXTargetClosed } = require("../scraper/xScraper");
+const { scrapeLinkedInFull, isTargetClosed: isLinkedInTargetClosed } = require("../scraper/linkedinScraper");
 const { analyzePosts, filterLeads, leadScore } = require("../services/matcher");
 const { classifyLeads, llmStatus, getLlmUsage } = require("../services/classifier");
 const { saveResults, saveLeads, loadState, saveState, readJson, writeJson, mergePosts, mergeLeads } = require("../services/store");
-const { notifyLeads, notifyXLeads } = require("../services/discord");
+const { notifyLeads, notifyXLeads, notifyLinkedInLeads } = require("../services/discord");
 
 let running = false;
 
@@ -18,14 +19,16 @@ async function runScrapeJob({ reason = "manual", sources } = {}) {
   }
   const wantReddit = sources ? sources.reddit === true : true;
   const wantX = sources ? sources.x === true : Boolean(config.x && config.x.enabled);
-  if (!wantReddit && !wantX) {
-    throw new Error("No sources selected (use --reddit, --x or --all)");
+  const wantLinkedIn = sources ? sources.linkedin === true : Boolean(config.linkedin && config.linkedin.enabled);
+  if (!wantReddit && !wantX && !wantLinkedIn) {
+    throw new Error("No sources selected (use --reddit, --x, --linkedin or --all)");
   }
   running = true;
   const startedAt = new Date().toISOString();
   const sourceNames = [];
   if (wantReddit) sourceNames.push("reddit");
   if (wantX) sourceNames.push("x");
+  if (wantLinkedIn) sourceNames.push("linkedin");
   const subs = [];
   if (wantReddit) {
     if (config.subOrder === "full") {
@@ -60,6 +63,21 @@ async function runScrapeJob({ reason = "manual", sources } = {}) {
       } catch (tabErr) {
         console.error(`❌ X tab failed to open, X falls back to main tab: ${tabErr.message}`);
         xPage = null;
+      }
+    }
+    // LinkedIn runs in its own tab too, in parallel with the others.
+    let linkedinPage = null;
+    let linkedinKnownUrls = new Set();
+    if (wantLinkedIn) {
+      linkedinKnownUrls = new Set(
+        (await readJson(config.linkedin.postsFile, [])).map((p) => p.url).filter(Boolean)
+      );
+      try {
+        linkedinPage = await context.newPage();
+        console.log("🗂️  LinkedIn: opened separate tab");
+      } catch (tabErr) {
+        console.error(`❌ LinkedIn tab failed to open, LinkedIn falls back to main tab: ${tabErr.message}`);
+        linkedinPage = null;
       }
     }
 
@@ -209,14 +227,79 @@ async function runScrapeJob({ reason = "manual", sources } = {}) {
       };
     }
 
+    // LinkedIn pipeline: scrape → classify → save → notify.
+    async function linkedinPipeline() {
+      let targetPage = linkedinPage || page;
+      let linkedinPosts = [];
+      try {
+        linkedinPosts = await scrapeLinkedInFull(targetPage, linkedinKnownUrls);
+      } catch (err) {
+        // Dead renderer: retry once on a fresh tab.
+        if ((err && err.code === "TARGET_CLOSED") || (isLinkedInTargetClosed && isLinkedInTargetClosed(err))) {
+          console.error("❌ LinkedIn tab died, retrying on a fresh tab…");
+          try {
+            if (linkedinPage) { try { await linkedinPage.close(); } catch {} }
+            linkedinPage = await context.newPage();
+            targetPage = linkedinPage;
+            linkedinPosts = await scrapeLinkedInFull(targetPage, linkedinKnownUrls);
+          } catch (retryErr) {
+            console.error(`❌ LinkedIn retry failed, other results kept: ${retryErr.message}`);
+            linkedinPosts = [];
+          }
+        } else {
+          console.error(`❌ LinkedIn collection failed, other results kept: ${err.message}`);
+          linkedinPosts = [];
+        }
+      } finally {
+        if (linkedinPage) {
+          try { await linkedinPage.close(); } catch {}
+          console.log("🗂️  LinkedIn: separate tab closed");
+        }
+      }
+      const linkedinAnalyzed = analyzePosts(linkedinPosts);
+      const linkedinHeuristic = filterLeads(linkedinAnalyzed);
+      console.log(`🎯 LinkedIn heuristic leads: ${linkedinHeuristic.length}/${linkedinPosts.length}`);
+      const linkedinNotifiedUrls = new Set(await readJson(config.linkedin.notifiedFile, []));
+      const { leads: linkedinLeads, usage } = await withLlmLock(async () => {
+        const l = await classifyLeads(linkedinAnalyzed, linkedinNotifiedUrls);
+        return { leads: l, usage: getLlmUsage() };
+      });
+      for (const lead of linkedinLeads.slice(0, 20)) {
+        console.log(`   ✅ 💼 [${lead.grade}|${leadScore(lead)}|${lead.intentType}|${(lead.capabilities || []).join(", ")}] ${lead.handle || lead.author || "?"} ${String(lead.title || "").slice(0, 110)} — ${lead.url}`);
+      }
+      if (linkedinLeads.length > 20) console.log(`   ... +${linkedinLeads.length - 20} more`);
+      const prevLinkedInAll = await readJson(config.linkedin.postsFile, []);
+      const prevLinkedInMatched = await readJson(config.linkedin.matchedFile, []);
+      const mergedLinkedInAll = mergePosts(prevLinkedInAll, linkedinPosts);
+      const mergedLinkedInMatched = mergePosts(prevLinkedInMatched, linkedinHeuristic);
+      await writeJson(config.linkedin.postsFile, mergedLinkedInAll);
+      await writeJson(config.linkedin.matchedFile, mergedLinkedInMatched);
+      const prevLinkedInLeads = await readJson(config.linkedin.leadsFile, []);
+      const mergedLinkedInLeads = mergeLeads(prevLinkedInLeads, linkedinLeads);
+      await writeJson(config.linkedin.leadsFile, mergedLinkedInLeads);
+      const linkedinQueries = (linkedinPosts.length > 0 || linkedinHeuristic.length > 0 || linkedinLeads.length > 0)
+        ? [...new Set(linkedinPosts.map((p) => p.query).filter(Boolean))]
+        : [];
+      const linkedinNotify = await notifyLinkedInLeads(linkedinLeads, { reason, scraped: linkedinPosts.length, queries: linkedinQueries });
+      return {
+        queries: linkedinQueries, scraped: linkedinPosts.length, matched: linkedinHeuristic.length,
+        leads: linkedinLeads.length, totalStored: mergedLinkedInAll.length,
+        totalMatchedStored: mergedLinkedInMatched.length, totalLeadsStored: mergedLinkedInLeads.length,
+        notified: linkedinNotify.sent, llmUsage: usage,
+      };
+    }
+
     let redditRes = { allPosts: [], perSub: [], abortedEarly: false, heuristicLeads: [], leads: [], allCount: 0, matchedCount: 0, leadsCount: 0, notified: 0 };
     let xResult = { enabled: wantX, queries: [], scraped: 0, matched: 0, leads: 0, notified: 0 };
+    let linkedinResult = { enabled: wantLinkedIn, queries: [], scraped: 0, matched: 0, leads: 0, notified: 0 };
     let redditLlmUsage = { calls: 0, promptTokens: 0, completionTokens: 0, totalTokens: 0 };
     let xLlmUsage = { calls: 0, promptTokens: 0, completionTokens: 0, totalTokens: 0 };
+    let linkedinLlmUsage = { calls: 0, promptTokens: 0, completionTokens: 0, totalTokens: 0 };
     if (sourceNames.length > 1) {
       console.log("⚡ Parallel pipelines, each notifies on finish (same channel)");
     }
-    const runners = sourceNames.map((name) => (name === "reddit" ? redditPipeline : xPipeline));
+    const pipelineFor = { reddit: redditPipeline, x: xPipeline, linkedin: linkedinPipeline };
+    const runners = sourceNames.map((name) => pipelineFor[name]);
     const settled = await Promise.allSettled(runners.map((run) => run()));
     let succeeded = 0;
     for (let i = 0; i < sourceNames.length; i++) {
@@ -227,8 +310,14 @@ async function runScrapeJob({ reason = "manual", sources } = {}) {
           console.error("❌ Reddit pipeline failed:", outcome.reason);
           throw outcome.reason;
         }
-        console.error(`❌ X pipeline failed, other results kept: ${(outcome.reason && outcome.reason.message) || outcome.reason}`);
-        xResult = { enabled: true, error: (outcome.reason && outcome.reason.message) || "x failed", queries: [], scraped: 0, matched: 0, leads: 0, notified: 0 };
+        const label = name === "x" ? "𝕏" : "LinkedIn";
+        const error = (outcome.reason && outcome.reason.message) || `${name} failed`;
+        console.error(`❌ ${label} pipeline failed, other results kept: ${error}`);
+        if (name === "x") {
+          xResult = { enabled: true, error, queries: [], scraped: 0, matched: 0, leads: 0, notified: 0 };
+        } else {
+          linkedinResult = { enabled: true, error, queries: [], scraped: 0, matched: 0, leads: 0, notified: 0 };
+        }
         continue;
       }
       succeeded++;
@@ -236,9 +325,16 @@ async function runScrapeJob({ reason = "manual", sources } = {}) {
       if (name === "reddit") {
         redditRes = value;
         redditLlmUsage = value.llmUsage || redditLlmUsage;
-      } else {
+      } else if (name === "x") {
         xLlmUsage = value.llmUsage || xLlmUsage;
         xResult = {
+          enabled: true, queries: value.queries, scraped: value.scraped, matched: value.matched,
+          leads: value.leads, totalStored: value.totalStored, totalMatchedStored: value.totalMatchedStored,
+          totalLeadsStored: value.totalLeadsStored, notified: value.notified,
+        };
+      } else {
+        linkedinLlmUsage = value.llmUsage || linkedinLlmUsage;
+        linkedinResult = {
           enabled: true, queries: value.queries, scraped: value.scraped, matched: value.matched,
           leads: value.leads, totalStored: value.totalStored, totalMatchedStored: value.totalMatchedStored,
           totalLeadsStored: value.totalLeadsStored, notified: value.notified,
@@ -250,13 +346,13 @@ async function runScrapeJob({ reason = "manual", sources } = {}) {
     const { allPosts, perSub, abortedEarly, heuristicLeads, leads, allCount, matchedCount, leadsCount, notified } = redditRes;
 
     const combinedLlmUsage = {
-      calls: (redditLlmUsage.calls || 0) + (xLlmUsage.calls || 0),
-      promptTokens: (redditLlmUsage.promptTokens || 0) + (xLlmUsage.promptTokens || 0),
-      completionTokens: (redditLlmUsage.completionTokens || 0) + (xLlmUsage.completionTokens || 0),
-      totalTokens: (redditLlmUsage.totalTokens || 0) + (xLlmUsage.totalTokens || 0),
+      calls: (redditLlmUsage.calls || 0) + (xLlmUsage.calls || 0) + (linkedinLlmUsage.calls || 0),
+      promptTokens: (redditLlmUsage.promptTokens || 0) + (xLlmUsage.promptTokens || 0) + (linkedinLlmUsage.promptTokens || 0),
+      completionTokens: (redditLlmUsage.completionTokens || 0) + (xLlmUsage.completionTokens || 0) + (linkedinLlmUsage.completionTokens || 0),
+      totalTokens: (redditLlmUsage.totalTokens || 0) + (xLlmUsage.totalTokens || 0) + (linkedinLlmUsage.totalTokens || 0),
     };
-    if (redditLlmUsage.estimatedUsd !== undefined || xLlmUsage.estimatedUsd !== undefined) {
-      combinedLlmUsage.estimatedUsd = Number((((redditLlmUsage.estimatedUsd || 0) + (xLlmUsage.estimatedUsd || 0))).toFixed(4));
+    if (redditLlmUsage.estimatedUsd !== undefined || xLlmUsage.estimatedUsd !== undefined || linkedinLlmUsage.estimatedUsd !== undefined) {
+      combinedLlmUsage.estimatedUsd = Number((((redditLlmUsage.estimatedUsd || 0) + (xLlmUsage.estimatedUsd || 0) + (linkedinLlmUsage.estimatedUsd || 0))).toFixed(4));
     }
 
     const state = await loadState();
@@ -274,6 +370,7 @@ async function runScrapeJob({ reason = "manual", sources } = {}) {
       totalLeadsStored: leadsCount,
       notified,
       x: xResult,
+      linkedin: linkedinResult,
       llm: { ...llmStatus(), usage: combinedLlmUsage },
       abortedEarly,
       ok: true,

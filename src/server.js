@@ -18,7 +18,8 @@ app.get("/", (req, res) => {
     subreddits: config.subreddits,
     schedule: config.cronSchedule,
     x: { enabled: Boolean(config.x && config.x.enabled), queries: (config.x && config.x.queries) || [] },
-    endpoints: ["GET /health", "GET /api/status", "GET /api/posts", "GET /api/matched", "GET /api/leads", "POST /api/scrape", "POST /api/notify-test", "GET /api/x/posts", "GET /api/x/matched", "GET /api/x/leads"],
+    linkedin: { enabled: Boolean(config.linkedin && config.linkedin.enabled), queries: (config.linkedin && config.linkedin.queries) || [] },
+    endpoints: ["GET /health", "GET /api/status", "GET /api/posts", "GET /api/matched", "GET /api/leads", "POST /api/scrape", "POST /api/notify-test", "GET /api/x/posts", "GET /api/x/matched", "GET /api/x/leads", "GET /api/linkedin/posts", "GET /api/linkedin/matched", "GET /api/linkedin/leads"],
   });
 });
 
@@ -33,6 +34,7 @@ app.get("/api/status", async (req, res) => {
     capabilities: config.capabilities.map((k) => k.label),
     llm: llmStatus(),
     x: { enabled: Boolean(config.x && config.x.enabled), queries: (config.x && config.x.queries) || [] },
+    linkedin: { enabled: Boolean(config.linkedin && config.linkedin.enabled), queries: (config.linkedin && config.linkedin.queries) || [] },
     ...state,
   });
 });
@@ -83,6 +85,34 @@ app.get("/api/x/leads", async (req, res) => {
   const capability = (req.query.capability || "").toLowerCase();
   const grade = (req.query.grade || "").toUpperCase();
   let leads = await readJson(config.x.leadsFile, []);
+  if (minScore) leads = leads.filter((l) => leadScore(l) >= minScore);
+  if (query) leads = leads.filter((l) => (l.query || "").toLowerCase() === query);
+  if (handle) leads = leads.filter((l) => (l.handle || l.author || "").toLowerCase() === handle);
+  if (capability) leads = leads.filter((l) => (l.capabilities || []).some((c) => String(c).toLowerCase() === capability));
+  if (grade) leads = leads.filter((l) => l.grade === grade);
+  res.json({ count: leads.length, leads: leads.slice(0, limit) });
+});
+
+app.get("/api/linkedin/posts", async (req, res) => {
+  const limit = Math.max(1, Math.min(500, parseInt(req.query.limit || "50", 10)));
+  const posts = await readJson(config.linkedin.postsFile, []);
+  res.json({ count: posts.length, posts: posts.slice(0, limit) });
+});
+
+app.get("/api/linkedin/matched", async (req, res) => {
+  const limit = Math.max(1, Math.min(500, parseInt(req.query.limit || "50", 10)));
+  const posts = await readJson(config.linkedin.matchedFile, []);
+  res.json({ count: posts.length, posts: posts.slice(0, limit) });
+});
+
+app.get("/api/linkedin/leads", async (req, res) => {
+  const limit = Math.max(1, Math.min(500, parseInt(req.query.limit || "50", 10)));
+  const minScore = parseInt(req.query.minScore || "0", 10);
+  const query = (req.query.query || "").toLowerCase();
+  const handle = (req.query.handle || "").toLowerCase();
+  const capability = (req.query.capability || "").toLowerCase();
+  const grade = (req.query.grade || "").toUpperCase();
+  let leads = await readJson(config.linkedin.leadsFile, []);
   if (minScore) leads = leads.filter((l) => leadScore(l) >= minScore);
   if (query) leads = leads.filter((l) => (l.query || "").toLowerCase() === query);
   if (handle) leads = leads.filter((l) => (l.handle || l.author || "").toLowerCase() === handle);

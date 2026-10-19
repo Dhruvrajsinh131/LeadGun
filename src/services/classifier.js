@@ -17,11 +17,14 @@ const AGENCY_CAPABILITIES = [
 
 function buildPrompt(post) {
   const isX = post.platform === "x";
+  const isLinkedIn = post.platform === "linkedin";
   const sourceLine = isX
     ? `X account: @${post.handle || post.author || "?"} (query: "${post.query || "?"}")`
-    : `Subreddit: r/${post.subreddit || "?"}`;
+    : isLinkedIn
+      ? `LinkedIn author: ${post.handle || post.author || "?"} (query: "${post.query || "?"}")`
+      : `Subreddit: r/${post.subreddit || "?"}`;
   const body = `Title: ${post.title || ""}\n${sourceLine}\nContent: ${(post.content || "").slice(0, 600)}`;
-  const postNoun = isX ? "X post" : "Reddit post";
+  const postNoun = isX ? "X post" : isLinkedIn ? "LinkedIn post" : "Reddit post";
   return [
     "You are a lead qualifier for a software development agency.",
     `Agency capabilities: ${AGENCY_CAPABILITIES}.`,
