@@ -17,7 +17,8 @@ app.get("/", (req, res) => {
     service: "reddit-lead-agent",
     subreddits: config.subreddits,
     schedule: config.cronSchedule,
-    endpoints: ["GET /health", "GET /api/status", "GET /api/posts", "GET /api/matched", "GET /api/leads", "POST /api/scrape", "POST /api/notify-test"],
+    x: { enabled: Boolean(config.x && config.x.enabled), queries: (config.x && config.x.queries) || [] },
+    endpoints: ["GET /health", "GET /api/status", "GET /api/posts", "GET /api/matched", "GET /api/leads", "POST /api/scrape", "POST /api/notify-test", "GET /api/x/posts", "GET /api/x/matched", "GET /api/x/leads"],
   });
 });
 
@@ -31,6 +32,7 @@ app.get("/api/status", async (req, res) => {
     subreddits: config.subreddits,
     capabilities: config.capabilities.map((k) => k.label),
     llm: llmStatus(),
+    x: { enabled: Boolean(config.x && config.x.enabled), queries: (config.x && config.x.queries) || [] },
     ...state,
   });
 });
@@ -56,6 +58,34 @@ app.get("/api/leads", async (req, res) => {
   let leads = await readJson(config.leadsFile, []);
   if (minScore) leads = leads.filter((l) => leadScore(l) >= minScore);
   if (subreddit) leads = leads.filter((l) => (l.subreddit || "").toLowerCase() === subreddit);
+  if (capability) leads = leads.filter((l) => (l.capabilities || []).some((c) => String(c).toLowerCase() === capability));
+  if (grade) leads = leads.filter((l) => l.grade === grade);
+  res.json({ count: leads.length, leads: leads.slice(0, limit) });
+});
+
+app.get("/api/x/posts", async (req, res) => {
+  const limit = Math.max(1, Math.min(500, parseInt(req.query.limit || "50", 10)));
+  const posts = await readJson(config.x.postsFile, []);
+  res.json({ count: posts.length, posts: posts.slice(0, limit) });
+});
+
+app.get("/api/x/matched", async (req, res) => {
+  const limit = Math.max(1, Math.min(500, parseInt(req.query.limit || "50", 10)));
+  const posts = await readJson(config.x.matchedFile, []);
+  res.json({ count: posts.length, posts: posts.slice(0, limit) });
+});
+
+app.get("/api/x/leads", async (req, res) => {
+  const limit = Math.max(1, Math.min(500, parseInt(req.query.limit || "50", 10)));
+  const minScore = parseInt(req.query.minScore || "0", 10);
+  const query = (req.query.query || "").toLowerCase();
+  const handle = (req.query.handle || "").toLowerCase();
+  const capability = (req.query.capability || "").toLowerCase();
+  const grade = (req.query.grade || "").toUpperCase();
+  let leads = await readJson(config.x.leadsFile, []);
+  if (minScore) leads = leads.filter((l) => leadScore(l) >= minScore);
+  if (query) leads = leads.filter((l) => (l.query || "").toLowerCase() === query);
+  if (handle) leads = leads.filter((l) => (l.handle || l.author || "").toLowerCase() === handle);
   if (capability) leads = leads.filter((l) => (l.capabilities || []).some((c) => String(c).toLowerCase() === capability));
   if (grade) leads = leads.filter((l) => l.grade === grade);
   res.json({ count: leads.length, leads: leads.slice(0, limit) });
@@ -88,7 +118,7 @@ async function start() {
   });
   console.log(`⏰ Scheduler set: "${config.cronSchedule}" (≈ every 3 hours with default "0 */3 * * *")`);
 
-  if (config.runOnStart) {
+  if (config.runOnStart && !process.argv.includes("--no-scrape")) {
     console.log("🚀 Initial scrape on startup...");
     runScrapeJob({ reason: "startup" });
   }

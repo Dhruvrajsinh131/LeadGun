@@ -5,8 +5,8 @@
   "main": "src/server.js",
   "scripts": {
     "start": "node src/server.js",
-    "scrape": "node -e \"require('./src/jobs/scrapeJob').runScrapeJob({reason:'cli'})\"",
-    "dev": "PORT=3000 SCRAPE_ON_START=false node src/server.js"
+    "scrape": "node src/cli.js",
+    "dev": "node src/server.js --no-scrape"
   },
   "keywords": [],
   "author": "",

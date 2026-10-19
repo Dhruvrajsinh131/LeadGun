@@ -9,11 +9,7 @@ function isConfigured() {
   return config.discord.enabled && Boolean(config.discord.botToken) && Boolean(config.discord.channelId);
 }
 
-// Discord answers HTTP 400 to an embed whose `url` is not a well-formed
-// http(s) URL, and one bad embed fails the whole message batch. Scraped
-// links are not always clean (fallback harvest, old stored posts), so
-// sanitize every URL: invalid ones are omitted from the embed instead of
-// poisoning the batch.
+// One malformed embed URL makes Discord reject the whole batch.
 function safeUrl(value) {
   if (typeof value !== "string") return undefined;
   const trimmed = value.trim();
@@ -46,8 +42,12 @@ function verifierLabel(classifiedBy) {
 
 function leadToEmbed(lead) {
   const url = safeUrl(lead.url);
+  const isX = lead.platform === "x";
+  const origin = isX
+    ? `𝕏 @${lead.handle || lead.author || "?"} · ${lead.query ? `"${lead.query}"` : lead.source || "x-search"}`
+    : `📍 r/${lead.subreddit} · ${lead.source || "feed"} · ⬆ ${lead.upvotes ?? 0} · 💬 ${lead.comments ?? 0}`;
   const lines = [
-    `📍 r/${lead.subreddit} · ${lead.source || "feed"} · ⬆ ${lead.upvotes ?? 0} · 💬 ${lead.comments ?? 0}`,
+    origin,
     `🧰 ${(lead.capabilities || []).join(", ") || "general"}`,
   ];
   if (lead.warm) lines.push("🔥 Red-hot buyer — budget mentioned");
@@ -67,9 +67,7 @@ function leadToEmbed(lead) {
   return embed;
 }
 
-// Discord's documented limits for bots (free or not — exceeding any of
-// them is an instant HTTP 400). Enforced client-side so a send can never
-// fail on shape: truncate, never reject.
+// Discord hard limits; exceeding any is HTTP 400.
 const LIMITS = {
   content: 2000,
   embedsPerMessage: 10,
@@ -89,7 +87,6 @@ function clampEmbed(embed) {
   if (Array.isArray(out.fields)) {
     out.fields = out.fields.slice(0, LIMITS.fieldsPerEmbed).map((f) => ({
       name: String((f && f.name) || "—").slice(0, LIMITS.fieldName),
-      // Empty field values are also a 400 — always fall back to "—".
       value: String((f && f.value) || "—").slice(0, LIMITS.fieldValue) || "—",
       inline: Boolean(f && f.inline),
     }));
@@ -105,9 +102,7 @@ function embedChars(embed) {
   return n;
 }
 
-// Caps embeds per message and shrinks the longest descriptions until the
-// 6000-char message total fits. Our batches are small, so this loop is
-// pure insurance that only bites on pathological input.
+// Shrink content until the 6000-char message total fits.
 function fitPayload(payload) {
   const out = { ...payload };
   if (typeof out.content === "string" && out.content.length > LIMITS.content) {
@@ -115,12 +110,6 @@ function fitPayload(payload) {
   }
   if (Array.isArray(out.embeds)) {
     const embeds = out.embeds.map(clampEmbed).slice(0, LIMITS.embedsPerMessage);
-    // Shrink the longest text slot until the 6000-char message total fits.
-    // Slot minimums keep real content untouched (our summaries run ~150
-    // chars, titles ~60): only pathological input ever shrinks, and text
-    // always converges because every minimum is far below the total cap.
-    // Nothing is ever dropped — a lead is either sent whole or, in the
-    // absurd case, with shortened text, never silently lost.
     let guard = 0;
     const messageChars = () => (out.content || "").length + embeds.reduce((n, e) => n + embedChars(e), 0);
     const cut = (s, min) => (s.length > min ? `${s.slice(0, Math.floor(s.length * 0.8))}…` : s);
@@ -166,10 +155,7 @@ async function readBodySnippet(res) {
   }
 }
 
-// Discord answers 429 with { retry_after: seconds } (sometimes
-// retry_after_ms). Honor it, capped at 30s — longer waits mean a global
-// limit, and queueing behind it helps nobody. Returns null when the
-// response carries no usable hint (caller then stops instead of guessing).
+// 429 retry_after (seconds or ms), capped at 30s. Null when no hint.
 async function readRetryAfterMs(res) {
   try {
     const data = await res.json();
@@ -181,14 +167,7 @@ async function readRetryAfterMs(res) {
   return null;
 }
 
-// Sends each payload independently and reports per-message success.
-// Every payload passes fitPayload first, so a 400 on shape is
-// structurally impossible — the only failures left are network issues
-// or auth/permission problems, which are logged with Discord's own
-// explanation. A failed batch doesn't abort the run; the remaining
-// batches still go out. On 429 Discord tells us how long to wait
-// (retry_after) — we honor it once per message, then give up on that
-// message instead of hammering the free rate limit.
+// Send payloads independently; on 429 wait once, then give up.
 async function sendPayloads(payloads) {
   const { botToken, channelId } = config.discord;
   const results = [];
@@ -232,7 +211,6 @@ async function sendPayloads(payloads) {
       delivered = true;
     }
     results.push(delivered);
-    // A limit that survived its retry would hit every later message too.
     if (rateLimited) break;
     await sleep(1000);
   }
@@ -244,10 +222,7 @@ async function notifyLeads(leads, summary) {
     console.log("💬 Discord not configured, skipping notifications.");
     return { sent: 0, skipped: "not-configured" };
   }
-  // Uniqueness is by normalized post URL: skipped when already notified
-  // in any previous run (record auto-migrates old raw URLs), and skipped
-  // when the same post appears twice in this run under cosmetic URL
-  // variants (trailing slash, utm params). Best-scored copy wins.
+  // Dedupe by normalized URL against previously notified and this run.
   const notified = new Set((await readJson(config.notifiedFile, [])).map(normalizeUrl).filter(Boolean));
   const seenThisRun = new Set();
   const fresh = leads
@@ -271,9 +246,7 @@ async function notifyLeads(leads, summary) {
     ...batches.map((group) => ({ embeds: group.map(leadToEmbed) })),
   ];
   const results = await sendPayloads(payloads);
-  // Only leads in successfully delivered batches count as notified, so a
-  // failed batch is retried on the next run instead of being forgotten.
-  // Index 0 is the summary message; batch n lives at results[n + 1].
+  // Only delivered batches count as notified; batch n is results[n + 1].
   const sentLeads = batches.filter((_, n) => results[n + 1]).flat();
   if (sentLeads.length > 0) {
     for (const l of sentLeads) notified.add(normalizeUrl(l.url));
@@ -283,4 +256,54 @@ async function notifyLeads(leads, summary) {
   return { sent: sentLeads.length };
 }
 
-module.exports = { isConfigured, leadToEmbed, notifyLeads, buildSummary, fitPayload, LIMITS };
+function buildXSummary(fresh, summary) {
+  const reason = RUN_LABELS[summary.reason] || String(summary.reason || "run");
+  const head = `𝕏 **X hunt complete!** Sniffed out **${plural(fresh.length, "fresh lead", "fresh leads")}** from **${plural(summary.scraped, "post", "posts")}** across **${plural(summary.queries.length, "query", "queries")}** · _${reason}_`;
+  const top = fresh.filter((l) => l.grade === "A").length;
+  const hot = fresh.filter((l) => l.warm).length;
+  const extras = [];
+  if (top > 0) extras.push(`🔥 ${plural(top, "A-grade", "A-grade")}`);
+  if (hot > 0) extras.push(`💰 ${plural(hot, "red-hot buyer", "red-hot buyers")}`);
+  return extras.length > 0 ? `${head}\n${extras.join(" · ")}` : head;
+}
+
+// Same as notifyLeads, with the separate x_notified file.
+async function notifyXLeads(leads, summary) {
+  if (!isConfigured()) {
+    console.log("💬 Discord not configured, skipping X notifications.");
+    return { sent: 0, skipped: "not-configured" };
+  }
+  const notifiedFile = (config.x && config.x.notifiedFile) || "x_notified.json";
+  const notified = new Set((await readJson(notifiedFile, [])).map(normalizeUrl).filter(Boolean));
+  const seenThisRun = new Set();
+  const fresh = leads
+    .filter((l) => normalizeUrl(l.url) && scoreOf(l) >= config.discord.minScore)
+    .sort((a, b) => (Number(b.warm) - Number(a.warm)) || (scoreOf(b) - scoreOf(a)))
+    .filter((l) => {
+      const key = normalizeUrl(l.url);
+      if (notified.has(key) || seenThisRun.has(key)) return false;
+      seenThisRun.add(key);
+      return true;
+    })
+    .slice(0, config.discord.maxLeads);
+  if (fresh.length === 0) {
+    console.log("💬 No new X leads to notify.");
+    return { sent: 0 };
+  }
+  const batches = [];
+  for (let i = 0; i < fresh.length; i += 5) batches.push(fresh.slice(i, i + 5));
+  const payloads = [
+    { content: buildXSummary(fresh, summary) },
+    ...batches.map((group) => ({ embeds: group.map(leadToEmbed) })),
+  ];
+  const results = await sendPayloads(payloads);
+  const sentLeads = batches.filter((_, n) => results[n + 1]).flat();
+  if (sentLeads.length > 0) {
+    for (const l of sentLeads) notified.add(normalizeUrl(l.url));
+    await writeJson(notifiedFile, [...notified].slice(-5000));
+  }
+  console.log(`💬 Notified Discord (X): ${sentLeads.length}/${fresh.length} lead(s).`);
+  return { sent: sentLeads.length };
+}
+
+module.exports = { isConfigured, leadToEmbed, notifyLeads, notifyXLeads, buildSummary, buildXSummary, fitPayload, LIMITS };
