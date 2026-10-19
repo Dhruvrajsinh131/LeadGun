@@ -1,9 +1,16 @@
 "use strict";
 
 const config = require("../config");
+const { freshnessFor } = require("./freshness");
 
 function matchSources(text, patterns) {
   return patterns.filter((re) => re.test(text)).map((re) => re.source);
+}
+
+// LinkedIn often uses Unicode bold ("𝗪𝗲 𝗮𝗿𝗲 𝗵𝗶𝗿𝗶𝗻𝗴") which defeats
+// ASCII regexes. NFKD folds those glyphs back to plain letters.
+function normalizeText(text) {
+  return String(text || "").normalize("NFKD").replace(/[\u0300-\u036f]/g, "");
 }
 
 function extractCapabilities(text) {
@@ -19,7 +26,7 @@ function extractCapabilities(text) {
 function extractSignals(post) {
   const title = post.title || "";
   const content = post.content || "";
-  const text = `${title}\n${content}`;
+  const text = normalizeText(`${title}\n${content}`);
   const directIntent = matchSources(text, config.directIntentPatterns);
   // Hard excludes (sellers/seekers) apply even with direct intent; soft
   // excludes only when there is no direct intent.
@@ -64,18 +71,20 @@ function leadScore(lead) {
 
 function analyzePost(post) {
   // Drop previous verdict fields so a re-analysis is always fresh.
-  const { score, grade, classifiedBy, reasoning, budget, llmError, warm, ...fresh } = post;
+  const { score, grade, classifiedBy, reasoning, budget, llmError, warm, freshness, ageMs, ageDays, ageLabel, isFresh, isHealthy, ...fresh } = post;
   const signals = extractSignals(fresh);
+  const freshnessInfo = freshnessFor(fresh);
   const heuristic = heuristicScore(signals, fresh);
   const hasIntent = signals.directIntent.length > 0 || signals.indirectIntent.length > 0;
   const hasCapability = signals.capabilities.length > 0;
-  // Needs hiring intent plus a capability keyword.
-  const isLead = !signals.excluded && hasIntent && hasCapability && heuristic >= config.minLeadScore;
+  // Needs hiring intent plus a capability keyword, posted within the age window.
+  const isLead = !signals.excluded && hasIntent && hasCapability && freshnessInfo.isFresh && heuristic >= config.minLeadScore;
   // Warm = direct intent plus budget signal; sorted first in Discord.
   const isWarm = isLead && signals.directIntent.length > 0 && signals.budgetSignals.length > 0;
   return {
     ...fresh,
     ...signals,
+    ...freshnessInfo,
     intentType: signals.directIntent.length > 0 ? "direct" : signals.indirectIntent.length > 0 ? "indirect" : "none",
     heuristicScore: heuristic,
     grade: gradeFor(heuristic),
@@ -83,6 +92,13 @@ function analyzePost(post) {
     warm: isWarm,
     classifiedBy: "heuristic",
   };
+}
+
+// Re-check stored leads against the current hard-exclude list, without
+// discarding an existing LLM verdict. Used when loading saved leads.
+function isHardExcluded(post) {
+  const text = normalizeText(`${post.title || ""}\n${post.content || ""}`);
+  return (config.hardExcludePatterns || []).some((re) => re.test(text));
 }
 
 function analyzePosts(posts) {
@@ -95,4 +111,4 @@ function filterLeads(analyzed) {
     .sort((a, b) => (Number(b.warm) - Number(a.warm)) || (b.heuristicScore - a.heuristicScore));
 }
 
-module.exports = { extractSignals, heuristicScore, gradeFor, leadScore, analyzePost, analyzePosts, filterLeads };
+module.exports = { extractSignals, heuristicScore, gradeFor, leadScore, analyzePost, analyzePosts, filterLeads, isHardExcluded };

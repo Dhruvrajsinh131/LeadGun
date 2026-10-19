@@ -2,7 +2,7 @@
 
 const config = require("../config");
 const { leadScore: scoreOf } = require("./matcher");
-const { readJson, writeJson, normalizeUrl } = require("./store");
+const { readJson, writeJson, normalizeUrl, withFreshness, isActiveLead } = require("./store");
 const { sleep } = require("../utils/humanBehavior");
 
 function isConfigured() {
@@ -40,6 +40,12 @@ function verifierLabel(classifiedBy) {
   return "⚙️ Heuristic";
 }
 
+function freshnessLabel(lead) {
+  if (lead.isHealthy) return `🟢 Fresh · ${lead.ageLabel}`;
+  if (lead.isFresh) return `🟡 Aging · ${lead.ageLabel}`;
+  return `🔴 Stale · ${lead.ageLabel || "unknown"}`;
+}
+
 function leadToEmbed(lead) {
   const url = safeUrl(lead.url);
   const isX = lead.platform === "x";
@@ -51,6 +57,7 @@ function leadToEmbed(lead) {
       : `📍 r/${lead.subreddit} · ${lead.source || "feed"} · ⬆ ${lead.upvotes ?? 0} · 💬 ${lead.comments ?? 0}`;
   const lines = [
     origin,
+    `🕒 ${freshnessLabel(lead)}`,
     `🧰 ${(lead.capabilities || []).join(", ") || "general"}`,
   ];
   if (lead.warm) lines.push("🔥 Red-hot buyer — budget mentioned");
@@ -139,12 +146,47 @@ function plural(n, one, many) {
 
 const RUN_LABELS = { cli: "manual run", cron: "scheduled scan", startup: "startup scan", api: "API trigger", test: "test ping" };
 
+function freshnessCounts(leads) {
+  const healthy = leads.filter((l) => l.isHealthy).length;
+  const aging = leads.filter((l) => l.isFresh && !l.isHealthy).length;
+  const extras = [];
+  if (healthy > 0) extras.push(`🟢 ${plural(healthy, "healthy lead", "healthy leads")} (<${config.healthyLeadAgeDays}d)`);
+  if (aging > 0) extras.push(`🟡 ${plural(aging, "aging lead", "aging leads")} (${config.healthyLeadAgeDays}-${config.maxLeadAgeDays}d)`);
+  return extras;
+}
+
+function contentKey(lead) {
+  return String(`${lead.title || ""}\n${lead.content || ""}`)
+    .replace(/[\u200b-\u200d\ufeff\u2060\u00ad]/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase()
+    .slice(0, 300);
+}
+
+// Refresh age fields, drop stale/undated leads, healthy first then score.
+// Identical spam reposts (same text, different handles) collapse to the best one.
+function selectFreshLeads(leads) {
+  const now = Date.now();
+  const sorted = leads
+    .map((l) => withFreshness(l, now))
+    .filter((l) => isActiveLead(l, now) && normalizeUrl(l.url) && scoreOf(l) >= config.discord.minScore)
+    .sort((a, b) => (Number(b.isHealthy) - Number(a.isHealthy)) || (Number(b.warm) - Number(a.warm)) || (scoreOf(b) - scoreOf(a)));
+  const seen = new Set();
+  return sorted.filter((l) => {
+    const key = contentKey(l);
+    if (key && seen.has(key)) return false;
+    if (key) seen.add(key);
+    return true;
+  });
+}
+
 function buildSummary(fresh, summary) {
   const reason = RUN_LABELS[summary.reason] || String(summary.reason || "run");
   const head = `🎯 **Lead hunt complete!** Sniffed out **${plural(fresh.length, "fresh lead", "fresh leads")}** from **${plural(summary.scraped, "post", "posts")}** across **${plural(summary.subreddits.length, "subreddit", "subreddits")}** · _${reason}_`;
   const top = fresh.filter((l) => l.grade === "A").length;
   const hot = fresh.filter((l) => l.warm).length;
-  const extras = [];
+  const extras = freshnessCounts(fresh);
   if (top > 0) extras.push(`🔥 ${plural(top, "A-grade", "A-grade")}`);
   if (hot > 0) extras.push(`💰 ${plural(hot, "red-hot buyer", "red-hot buyers")}`);
   return extras.length > 0 ? `${head}\n${extras.join(" · ")}` : head;
@@ -228,9 +270,7 @@ async function notifyLeads(leads, summary) {
   // Dedupe by normalized URL against previously notified and this run.
   const notified = new Set((await readJson(config.notifiedFile, [])).map(normalizeUrl).filter(Boolean));
   const seenThisRun = new Set();
-  const fresh = leads
-    .filter((l) => normalizeUrl(l.url) && scoreOf(l) >= config.discord.minScore)
-    .sort((a, b) => (Number(b.warm) - Number(a.warm)) || (scoreOf(b) - scoreOf(a)))
+  const fresh = selectFreshLeads(leads)
     .filter((l) => {
       const key = normalizeUrl(l.url);
       if (notified.has(key) || seenThisRun.has(key)) return false;
@@ -264,7 +304,7 @@ function buildXSummary(fresh, summary) {
   const head = `𝕏 **X hunt complete!** Sniffed out **${plural(fresh.length, "fresh lead", "fresh leads")}** from **${plural(summary.scraped, "post", "posts")}** across **${plural(summary.queries.length, "query", "queries")}** · _${reason}_`;
   const top = fresh.filter((l) => l.grade === "A").length;
   const hot = fresh.filter((l) => l.warm).length;
-  const extras = [];
+  const extras = freshnessCounts(fresh);
   if (top > 0) extras.push(`🔥 ${plural(top, "A-grade", "A-grade")}`);
   if (hot > 0) extras.push(`💰 ${plural(hot, "red-hot buyer", "red-hot buyers")}`);
   return extras.length > 0 ? `${head}\n${extras.join(" · ")}` : head;
@@ -279,9 +319,7 @@ async function notifyXLeads(leads, summary) {
   const notifiedFile = (config.x && config.x.notifiedFile) || "x_notified.json";
   const notified = new Set((await readJson(notifiedFile, [])).map(normalizeUrl).filter(Boolean));
   const seenThisRun = new Set();
-  const fresh = leads
-    .filter((l) => normalizeUrl(l.url) && scoreOf(l) >= config.discord.minScore)
-    .sort((a, b) => (Number(b.warm) - Number(a.warm)) || (scoreOf(b) - scoreOf(a)))
+  const fresh = selectFreshLeads(leads)
     .filter((l) => {
       const key = normalizeUrl(l.url);
       if (notified.has(key) || seenThisRun.has(key)) return false;
@@ -314,7 +352,7 @@ function buildLinkedInSummary(fresh, summary) {
   const head = `💼 **LinkedIn hunt complete!** Sniffed out **${plural(fresh.length, "fresh lead", "fresh leads")}** from **${plural(summary.scraped, "post", "posts")}** across **${plural(summary.queries.length, "query", "queries")}** · _${reason}_`;
   const top = fresh.filter((l) => l.grade === "A").length;
   const hot = fresh.filter((l) => l.warm).length;
-  const extras = [];
+  const extras = freshnessCounts(fresh);
   if (top > 0) extras.push(`🔥 ${plural(top, "A-grade", "A-grade")}`);
   if (hot > 0) extras.push(`💰 ${plural(hot, "red-hot buyer", "red-hot buyers")}`);
   return extras.length > 0 ? `${head}\n${extras.join(" · ")}` : head;
@@ -329,9 +367,7 @@ async function notifyLinkedInLeads(leads, summary) {
   const notifiedFile = (config.linkedin && config.linkedin.notifiedFile) || "linkedin_notified.json";
   const notified = new Set((await readJson(notifiedFile, [])).map(normalizeUrl).filter(Boolean));
   const seenThisRun = new Set();
-  const fresh = leads
-    .filter((l) => normalizeUrl(l.url) && scoreOf(l) >= config.discord.minScore)
-    .sort((a, b) => (Number(b.warm) - Number(a.warm)) || (scoreOf(b) - scoreOf(a)))
+  const fresh = selectFreshLeads(leads)
     .filter((l) => {
       const key = normalizeUrl(l.url);
       if (notified.has(key) || seenThisRun.has(key)) return false;
@@ -359,4 +395,4 @@ async function notifyLinkedInLeads(leads, summary) {
   return { sent: sentLeads.length };
 }
 
-module.exports = { isConfigured, leadToEmbed, notifyLeads, notifyXLeads, notifyLinkedInLeads, buildSummary, buildXSummary, buildLinkedInSummary, fitPayload, LIMITS };
+module.exports = { isConfigured, leadToEmbed, notifyLeads, notifyXLeads, notifyLinkedInLeads, buildSummary, buildXSummary, buildLinkedInSummary, fitPayload, LIMITS, selectFreshLeads };

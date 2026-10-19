@@ -37,6 +37,8 @@ async function collectPrimary(page, subreddit, source) {
       url: post.getAttribute("content-href") || "",
       upvotes: parseInt(post.getAttribute("score") || "0", 10) || 0,
       comments: parseInt(post.getAttribute("comment-count") || "0", 10) || 0,
+      // Reddit renders the exact timestamp as an attribute on shreddit-post.
+      createdAt: post.getAttribute("created-timestamp") || "",
       scrapedAt: new Date().toISOString(),
     }))
   );

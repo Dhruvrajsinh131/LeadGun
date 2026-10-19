@@ -236,7 +236,25 @@ async function collectPosts(page, query) {
               if (author) break;
             }
           }
-          return { text, author, profileUrl: profileEl ? profileEl.href : "" };
+          // Age: prefer the absolute datetime, fall back to relative labels
+          // like "20m •", "2h •", "3d •".
+          let createdAt = "";
+          let timeAgo = "";
+          const timeEl = card.querySelector("time");
+          if (timeEl) {
+            createdAt = (timeEl.getAttribute("datetime") || "").trim();
+            if (!createdAt) timeAgo = (timeEl.innerText || "").trim();
+          }
+          if (!createdAt && !timeAgo) {
+            for (const el of card.querySelectorAll("span, p")) {
+              const t = (el.innerText || "").trim();
+              if (/^(?:\d+\s*(?:m|h|d|w|mo|y)|just now|yesterday)\s*[•·]?$/i.test(t)) {
+                timeAgo = t.replace(/\s*[•·]\s*$/, "");
+                break;
+              }
+            }
+          }
+          return { text, author, profileUrl: profileEl ? profileEl.href : "", createdAt, timeAgo };
         });
       },
       { cardSelector: CARD_SELECTOR, textSelector: TEXT_SELECTOR, profileSelector: PROFILE_SELECTOR }
@@ -268,6 +286,8 @@ async function collectPosts(page, query) {
       upvotes: 0,
       comments: 0,
       author: p.author || "",
+      createdAt: p.createdAt || "",
+      timeAgo: p.timeAgo || "",
       scrapedAt: new Date().toISOString(),
       source: `linkedin-search: ${query}`,
     });

@@ -23,17 +23,24 @@ function buildPrompt(post) {
     : isLinkedIn
       ? `LinkedIn author: ${post.handle || post.author || "?"} (query: "${post.query || "?"}")`
       : `Subreddit: r/${post.subreddit || "?"}`;
-  const body = `Title: ${post.title || ""}\n${sourceLine}\nContent: ${(post.content || "").slice(0, 600)}`;
+  const ageLine = post.ageLabel ? `Posted: ${post.ageLabel} (${post.ageDays} days ago)` : "Posted: unknown";
+  const body = `Title: ${post.title || ""}\n${sourceLine}\n${ageLine}\nContent: ${(post.content || "").slice(0, 600)}`;
   const postNoun = isX ? "X post" : isLinkedIn ? "LinkedIn post" : "Reddit post";
   return [
     "You are a lead qualifier for a software development agency.",
     `Agency capabilities: ${AGENCY_CAPABILITIES}.`,
-    `Decide if this ${postNoun} is a sales lead: someone who may pay a developer, freelancer, team, or agency.`,
+    `Decide if this ${postNoun} is a sales lead: a BUYER who may pay a developer, freelancer, team, or agency.`,
     "Count INDIRECT intent too (e.g. slow backend, scaling pain, Odoo struggles, RAG needs) when professional work is likely required.",
     "Full-time / direct-hire employment listings (e.g. 'Senior Python Engineer, $3000/month', 'we are hiring...') ARE leads: a company hiring engineers may also buy agency, contract, or staff-augmentation services. Score them by project clarity like any hiring post.",
-    "Reject tutorials, questions with no project, job seekers offering services, and spam.",
-    "Also reject: personal stories, war-stories, or observations with no request for help; DIYers who say they will do it themselves or won't pay; competitors showcasing their own product or agency; job boards, salary lists, and roundup posts; vague posts with no clear project, budget signal, or ask.",
+    "REJECT anyone selling or offering their own services: freelancers advertising, agencies/consultants promoting their services, 'hire me', 'open to work', 'looking for clients/projects', 'I can build X for you', hotlists, bench sales, and vendor/staffing partnerships.",
+    "REJECT job seekers and job-board/recruiter spam: 'looking for a job/role', 'open to opportunities', 'send your CV', candidate marketing, hiring alerts and roundups.",
+    "REJECT people looking for a cofounder or equity-only partner (not paying clients).",
+    "REJECT hiring posts for roles unrelated to software/IT/digital work (sales, marketing, HR, finance, admin/EA, real estate, healthcare, etc.).",
+    "Also reject: tutorials, questions with no project, personal stories, war-stories, or observations with no request for help; DIYers who say they will do it themselves or won't pay; competitors showcasing their own product or agency; salary lists and roundup posts; vague posts with no clear project, budget signal, or ask.",
+    "REJECT job-board/recruiter spam and roundups of multiple open roles ('job alert', '30 dev jobs', 'multiple positions') — only a single employer hiring for its own team counts.",
+    "REJECT announcements, event/community posts, certifications, product launches, 'welcome to the team' posts, and generic advice/commentary with no ask.",
     "Price-shopping posts ('what would you charge to build X' with a real brief) ARE leads — score them by project clarity.",
+    `Posts older than ${config.maxLeadAgeDays} days are stale; never mark them as leads.`,
     `${body}`,
     "Reply with ONLY this JSON, no other text:",
     '{"isLead": true/false, "score": 0-100, "intentType": "direct"/"indirect"/"none", "capabilities": ["labels"], "budget": "signals or empty string", "reasoning": "one sentence"}',
@@ -131,7 +138,7 @@ async function classifyPost(post) {
   const score = verdict.isLead ? Math.max(verdict.score, config.minLeadScore) : Math.min(verdict.score, config.minLeadScore - 1);
   return {
     ...post,
-    isLead: verdict.isLead && score >= config.minLeadScore,
+    isLead: verdict.isLead && post.isFresh !== false && score >= config.minLeadScore,
     score,
     grade: gradeFor(score),
     intentType: verdict.intentType,
@@ -153,17 +160,22 @@ async function classifyLeads(analyzed, skipUrls = new Set()) {
   const renotified = candidates.length - fresh.length;
   const budget = Math.max(0, config.llm.maxCallsPerRun);
   const head = fresh.slice(0, budget);
-  const tail = [...fresh.slice(budget), ...candidates.filter((p) => seenNotified.has(normalizeUrl(p.url)))];
+  const unjudged = fresh.slice(budget);
+  const llmActive = config.llm.enabled && Boolean(config.llm.apiKey);
+  // With the LLM on, only LLM-judged leads pass: unjudged heuristic leads
+  // would bypass the seller/job-seeker checks. They get judged in later runs
+  // once higher-scored leads are notified and skipped. Without the LLM there
+  // is nothing to judge with, so heuristic verdicts stay.
+  const tail = llmActive ? [] : [...unjudged, ...candidates.filter((p) => seenNotified.has(normalizeUrl(p.url)))];
   resetUsage();
   const out = [];
   for (const post of head) {
     out.push(await classifyPost(post));
   }
-  if (tail.length > 0 || renotified > 0) {
-    console.log(`🧠 LLM budget: judged ${head.length}, kept ${tail.length} on heuristic verdict (cap ${budget}, ${renotified} already notified).`);
+  if (unjudged.length > 0 || tail.length > 0 || renotified > 0) {
+    const tailMsg = llmActive ? `dropped ${unjudged.length} unjudged` : `kept ${tail.length} on heuristic verdict`;
+    console.log(`🧠 LLM budget: judged ${head.length}, ${tailMsg} (cap ${budget}, ${renotified} already notified).`);
   }
-  // Log rejected heuristic leads so they don't vanish silently.
-  const llmActive = config.llm.enabled && Boolean(config.llm.apiKey);
   if (llmActive && head.length > 0) {
     const kept = out.filter((p) => p.isLead).length;
     console.log(`🧠 LLM verdict: kept ${kept}, rejected ${head.length - kept} (judged ${head.length}).`);
