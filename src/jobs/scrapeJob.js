@@ -149,6 +149,8 @@ async function runScrapeJob({ reason = "manual", sources } = {}) {
       const { allPosts, perSub, abortedEarly } = await collectReddit();
       const analyzed = analyzePosts(allPosts);
       const heuristicLeads = filterLeads(analyzed);
+      const freshCount = analyzed.filter((p) => p.isFresh).length;
+      console.log(`🕒 Freshness: ${freshCount}/${allPosts.length} posts within ${config.maxLeadAgeDays}d (healthy < ${config.healthyLeadAgeDays}d)`);
       console.log(`🎯 Heuristic leads: ${heuristicLeads.length}/${allPosts.length} (LLM: ${config.llm.enabled && config.llm.apiKey ? config.llm.model : "off"})`);
       const notifiedUrls = new Set(await readJson(config.notifiedFile, []));
       const { leads, usage } = await withLlmLock(async () => {
@@ -196,6 +198,8 @@ async function runScrapeJob({ reason = "manual", sources } = {}) {
       }
       const xAnalyzed = analyzePosts(xPosts);
       const xHeuristic = filterLeads(xAnalyzed);
+      const xFresh = xAnalyzed.filter((p) => p.isFresh).length;
+      console.log(`🕒 X freshness: ${xFresh}/${xPosts.length} posts within ${config.maxLeadAgeDays}d (healthy < ${config.healthyLeadAgeDays}d)`);
       console.log(`🎯 X heuristic leads: ${xHeuristic.length}/${xPosts.length}`);
       const xNotifiedUrls = new Set(await readJson(config.x.notifiedFile, []));
       const { leads: xLeads, usage } = await withLlmLock(async () => {
@@ -258,6 +262,8 @@ async function runScrapeJob({ reason = "manual", sources } = {}) {
       }
       const linkedinAnalyzed = analyzePosts(linkedinPosts);
       const linkedinHeuristic = filterLeads(linkedinAnalyzed);
+      const linkedinFresh = linkedinAnalyzed.filter((p) => p.isFresh).length;
+      console.log(`🕒 LinkedIn freshness: ${linkedinFresh}/${linkedinPosts.length} posts within ${config.maxLeadAgeDays}d (healthy < ${config.healthyLeadAgeDays}d)`);
       console.log(`🎯 LinkedIn heuristic leads: ${linkedinHeuristic.length}/${linkedinPosts.length}`);
       const linkedinNotifiedUrls = new Set(await readJson(config.linkedin.notifiedFile, []));
       const { leads: linkedinLeads, usage } = await withLlmLock(async () => {

@@ -3,7 +3,8 @@
 const fs = require("fs/promises");
 const path = require("path");
 const config = require("../config");
-const { leadScore } = require("./matcher");
+const { leadScore, isHardExcluded } = require("./matcher");
+const { freshnessFor } = require("./freshness");
 
 async function ensureDataDir() {
   await fs.mkdir(config.dataDir, { recursive: true });
@@ -51,14 +52,32 @@ function mergePosts(existing, incoming) {
   return [...byUrl.values()];
 }
 
+// Recompute freshness on every load so stored leads age out over time.
+function withFreshness(lead, now = Date.now()) {
+  return { ...lead, ...freshnessFor(lead, now) };
+}
+
+function isFreshLead(lead, now = Date.now()) {
+  return freshnessFor(lead, now).isFresh;
+}
+
+// Stored leads were judged under older rules; re-apply seller/recruiter
+// exclusions so old junk drops out without a re-scrape.
+function isActiveLead(lead, now = Date.now()) {
+  return isFreshLead(lead, now) && !isHardExcluded(lead);
+}
+
 function mergeLeads(existing, incoming) {
+  const now = Date.now();
   const byUrl = new Map();
   for (const p of [...incoming, ...existing]) {
     if (!p.url) continue;
     const prev = byUrl.get(p.url);
-    if (!prev || leadScore(p) > leadScore(prev)) byUrl.set(p.url, p);
+    if (!prev || leadScore(p) > leadScore(prev)) byUrl.set(p.url, withFreshness(p, now));
   }
-  return [...byUrl.values()].sort((a, b) => leadScore(b) - leadScore(a));
+  return [...byUrl.values()]
+    .filter((p) => isActiveLead(p, now))
+    .sort((a, b) => leadScore(b) - leadScore(a));
 }
 
 async function saveResults(allPosts, matchedPosts) {
@@ -88,4 +107,4 @@ async function saveState(state) {
   await writeJson(config.stateFile, state);
 }
 
-module.exports = { ensureDataDir, readJson, writeJson, mergePosts, mergeLeads, saveResults, saveLeads, loadState, saveState, normalizeUrl };
+module.exports = { ensureDataDir, readJson, writeJson, mergePosts, mergeLeads, saveResults, saveLeads, loadState, saveState, normalizeUrl, withFreshness, isFreshLead, isActiveLead };

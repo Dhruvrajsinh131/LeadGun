@@ -4,7 +4,7 @@ const express = require("express");
 const cron = require("node-cron");
 const config = require("./config");
 const { runScrapeJob, isRunning } = require("./jobs/scrapeJob");
-const { readJson, loadState, ensureDataDir } = require("./services/store");
+const { readJson, loadState, ensureDataDir, withFreshness, isActiveLead } = require("./services/store");
 const { leadScore } = require("./services/matcher");
 const { llmStatus } = require("./services/classifier");
 const { notifyLeads } = require("./services/discord");
@@ -57,7 +57,7 @@ app.get("/api/leads", async (req, res) => {
   const subreddit = (req.query.subreddit || "").toLowerCase();
   const capability = (req.query.capability || "").toLowerCase();
   const grade = (req.query.grade || "").toUpperCase();
-  let leads = await readJson(config.leadsFile, []);
+  let leads = (await readJson(config.leadsFile, [])).map((l) => withFreshness(l)).filter((l) => isActiveLead(l));
   if (minScore) leads = leads.filter((l) => leadScore(l) >= minScore);
   if (subreddit) leads = leads.filter((l) => (l.subreddit || "").toLowerCase() === subreddit);
   if (capability) leads = leads.filter((l) => (l.capabilities || []).some((c) => String(c).toLowerCase() === capability));
@@ -84,7 +84,7 @@ app.get("/api/x/leads", async (req, res) => {
   const handle = (req.query.handle || "").toLowerCase();
   const capability = (req.query.capability || "").toLowerCase();
   const grade = (req.query.grade || "").toUpperCase();
-  let leads = await readJson(config.x.leadsFile, []);
+  let leads = (await readJson(config.x.leadsFile, [])).map((l) => withFreshness(l)).filter((l) => isActiveLead(l));
   if (minScore) leads = leads.filter((l) => leadScore(l) >= minScore);
   if (query) leads = leads.filter((l) => (l.query || "").toLowerCase() === query);
   if (handle) leads = leads.filter((l) => (l.handle || l.author || "").toLowerCase() === handle);
@@ -112,7 +112,7 @@ app.get("/api/linkedin/leads", async (req, res) => {
   const handle = (req.query.handle || "").toLowerCase();
   const capability = (req.query.capability || "").toLowerCase();
   const grade = (req.query.grade || "").toUpperCase();
-  let leads = await readJson(config.linkedin.leadsFile, []);
+  let leads = (await readJson(config.linkedin.leadsFile, [])).map((l) => withFreshness(l)).filter((l) => isActiveLead(l));
   if (minScore) leads = leads.filter((l) => leadScore(l) >= minScore);
   if (query) leads = leads.filter((l) => (l.query || "").toLowerCase() === query);
   if (handle) leads = leads.filter((l) => (l.handle || l.author || "").toLowerCase() === handle);
@@ -129,7 +129,7 @@ app.post("/api/scrape", async (req, res) => {
 
 app.post("/api/notify-test", async (req, res) => {
   const result = await notifyLeads(
-    [{ title: "Test lead (ignore)", subreddit: "forhire", source: "test", capabilities: ["node.js"], grade: "A", heuristicScore: 99, intentType: "direct", classifiedBy: "test", url: `https://www.reddit.com/r/forhire/?test=${Date.now()}` }],
+    [{ title: "Test lead (ignore)", subreddit: "forhire", source: "test", capabilities: ["node.js"], grade: "A", heuristicScore: 99, intentType: "direct", classifiedBy: "test", createdAt: new Date().toISOString(), url: `https://www.reddit.com/r/forhire/?test=${Date.now()}` }],
     { reason: "test", scraped: 0, subreddits: [] }
   );
   res.json({ ok: true, ...result });
