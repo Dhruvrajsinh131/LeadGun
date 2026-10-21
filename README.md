@@ -9,3 +9,8 @@ How to use:
 3. Run npm start to start the server. It will scrape automatically every 3 hours
 4. Run npm run scrape to scrape once manually without starting server (pick sources with npm run scrape -- --reddit, --x, --linkedin or --all)
 5. Check leads at http://localhost:3000/api/leads, http://localhost:3000/api/x/leads, http://localhost:3000/api/linkedin/leads or on Discord
+
+Chrome:
+- No need to start Chrome manually. The scraper launches it on demand with remote debugging on http://127.0.0.1:9222 and reuses it across runs. Log in to Reddit/X/LinkedIn once in that window; the session persists in the profile.
+- If Chrome is already open with the same profile but without the debug port, close it fully and rerun — Chrome only exposes the port when it starts with --remote-debugging-port.
+- Override with CHROME_PATH (Chrome binary) and CHROME_PROFILE_DIR (profile folder, default ~/.config/my-site-test) in .env. Set CDP_URL if port 9222 is taken.
