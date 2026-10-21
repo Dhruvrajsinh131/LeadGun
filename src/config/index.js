@@ -2,6 +2,7 @@
 
 require("dotenv").config({ quiet: true });
 
+const os = require("os");
 const path = require("path");
 
 const DATA_DIR = path.join(__dirname, "..", "..", "data");
@@ -52,7 +53,13 @@ const X_QUERIES = [
 ];
 
 module.exports = {
-  cdpUrl: "http://127.0.0.1:9222",
+  cdpUrl: process.env.CDP_URL || "http://127.0.0.1:9222",
+  // Auto-launched on demand when the CDP port is closed.
+  chrome: {
+    executable: process.env.CHROME_PATH || "google-chrome",
+    profileDir: process.env.CHROME_PROFILE_DIR || path.join(os.homedir(), ".config", "my-site-test"),
+    launchTimeoutMs: 30000,
+  },
   subreddits: SUBREDDITS,
   founderSubs: FOUNDER_SUBS,
   subreddit: "forhire",
