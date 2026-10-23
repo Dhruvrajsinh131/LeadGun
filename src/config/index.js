@@ -25,30 +25,31 @@ const SUBREDDITS = [
 // Founder/problem subs get a score bonus in matcher.js.
 const FOUNDER_SUBS = ["startups", "saas", "sideproject", "smallbusiness", "entrepreneur"];
 
-// Rotated across runs, maxQueriesPerRun at a time.
-const LINKEDIN_QUERIES = [
-  "looking for a developer",
-  "need a developer",
-  "hiring a developer",
+// High-intent buyer queries: budgets, contracts, retainers and agency work.
+const HIGH_INTENT_QUERIES = [
   "looking for a development agency",
+  "need a software development agency",
   "need a development team",
-  "build my MVP",
-  "need a website built",
-  "looking for a technical cofounder",
-  "Next.js developer",
-  "Odoo customization",
+  "looking for a freelance developer",
+  "need a contract developer",
+  "looking for a developer on retainer",
+  "looking for a developer for ongoing work",
+  "need a developer for multiple projects",
+  "looking for a developer long term",
+  "outsourcing software development",
+  "white label development",
+  "staff augmentation",
+  "paid freelance project",
 ];
 
+// Rotated across runs, maxQueriesPerRun at a time.
+const LINKEDIN_QUERIES = [...HIGH_INTENT_QUERIES, "build my MVP", "need a website built", "need help building my SaaS"];
+
 const X_QUERIES = [
-  "looking for a developer",
-  "need a developer",
-  "looking for a development agency",
+  ...HIGH_INTENT_QUERIES,
   "need someone to build my app",
   "build my MVP",
-  "looking for a technical cofounder",
   "need a website built",
-  "Next.js developer",
-  "Odoo customization",
   "need help building my SaaS",
 ];
 
@@ -100,37 +101,27 @@ module.exports = {
   searchScrolls: 4,
   maxQueriesPerSub: 4,
   searchQueries: [
-    "looking for a developer",
-    "need a developer",
-    "hire a developer",
-    "developer needed",
-    "need someone to build",
-    "looking for someone to build",
+    ...HIGH_INTENT_QUERIES,
     "build my MVP",
     "need an MVP",
-    "looking for a freelancer",
-    "need a freelancer",
-    "looking for a development agency",
-    "need a development team",
-    "technical cofounder",
-    "AI developer",
-    "AI agent developer",
-    "React developer",
-    "Next.js developer",
-    "Odoo developer",
-    "Odoo customization",
-    "need help building",
+    "need a website built",
+    "how much would it cost to build",
+    "recommend a developer",
+    "looking for quotes",
+    "need someone to take over",
+    "Odoo developer needed",
+    "Next.js developer needed",
   ],
   subredditQueries: {
-    forhire: ["looking for a development agency", "need a development team", "how much would it cost to build", "recommend a developer", "need someone to take over", "looking for quotes"],
-    WebDeveloperJobs: ["React developer", "Next.js developer", "Node.js developer", "full stack developer", "React freelancer", "Next.js project"],
-    startups: ["need an MVP", "looking for technical cofounder", "build my SaaS", "how much does it cost to build", "need someone to build my idea"],
-    SaaS: ["looking for SaaS developer", "need help with SaaS", "build my SaaS", "AI SaaS"],
-    SideProject: ["build MVP", "MVP developer", "need someone to build", "turn my idea into"],
-    smallbusiness: ["need help building", "need API integration", "AI automation", "need help scaling"],
-    Entrepreneur: ["need a developer", "need business automation", "looking for technical cofounder"],
-    Odoo: ["Odoo developer needed", "Odoo customization", "Odoo integration", "Odoo help", "Odoo migration", "need help with Odoo", "Odoo freelancer", "Odoo POS"],
-    nextjs: ["Next.js developer needed", "Next.js freelancer", "React developer", "Next.js project"],
+    forhire: ["looking for a development agency", "need a development team", "how much would it cost to build", "looking for quotes", "need someone to take over", "need a contract developer"],
+    WebDeveloperJobs: ["contract developer", "freelance developer", "contract to hire"],
+    startups: ["need an MVP", "build my SaaS", "how much does it cost to build", "need someone to build my idea", "looking for a developer for ongoing work", "need a developer for multiple projects"],
+    SaaS: ["build my SaaS", "need help building my SaaS", "looking for a developer for ongoing work"],
+    SideProject: ["build MVP", "paid developer", "hire a freelance developer"],
+    smallbusiness: ["need help building", "need API integration", "AI automation", "hire a development agency"],
+    Entrepreneur: ["need business automation", "hire a development agency", "looking for a developer long term"],
+    Odoo: ["Odoo developer needed", "Odoo customization", "Odoo integration", "need help with Odoo", "Odoo contract developer", "hire Odoo development agency"],
+    nextjs: ["Next.js developer needed", "freelance Next.js developer", "Next.js development agency", "contract Next.js developer"],
   },
   llm: {
     enabled: true,
@@ -174,8 +165,8 @@ module.exports = {
   directIntentPatterns: [
     /\[hiring\]/i,
     /\bhiring\b/i,
-    /looking for.*\b(developer|dev|engineer|agency|team|freelancer|contractor|cofounder|partner)\b/i,
-    /need.*\b(developer|dev|engineer|agency|team|freelancer|contractor|cofounder|partner)\b/i,
+    /looking for.*\b(developer|dev|engineer|agency|team|freelancer|contractor|partner)\b/i,
+    /need.*\b(developer|dev|engineer|agency|team|freelancer|contractor|partner)\b/i,
     /need an? (mvp|saas|website|app|prototype)\b/i,
     /\bmvp\b.*\b(built|build|finish|developer|need)\b/i,
     /finish.*\b(mvp|product|app|project)\b/i,
@@ -197,7 +188,7 @@ module.exports = {
     /looking for.*contractor/i,
     /contract.*position/i,
     /full[\s-]?time.*dev/i,
-    /technical (cofounder|co-founder|partner|team)/i,
+    /technical (partner|team)/i,
     /pay(ing)? (someone|for|a developer)/i,
     /\bbudget\b.*\b(developer|dev|project|freelance)\b/i,
     // Buying-intent phrasing ("need + developer", "build + MVP").
@@ -209,6 +200,13 @@ module.exports = {
     /(need|looking for).*(quote|estimate)/i,
     /developers? wanted/i,
     /who can build/i,
+    // Freelance / agency / contract buying intent.
+    /\b(freelance|contract)\s+(developer|dev|engineer|designer|consultant|contractor)\b/i,
+    /\b(development|software|web|app|odoo|erp|ai|dev)\s+(agency|shop|studio|partner|company|firm|house)\b/i,
+    /\b(outsourc(e|ing)|white[\s-]?label|staff augmentation)\b/i,
+    /\b(long[\s-]?term|short[\s-]?term|ongoing|project[\s-]?based)\s+(project|contract|engagement|work|partnership|development)\b/i,
+    /\b(budget approved|approved budget|willing to pay|ready to pay|paying well)\b/i,
+    /\b(need|want|looking for)\b[^.\n]{0,30}\b(dev team|development team|extra capacity|extra hands|dev resources)\b/i,
   ],
   indirectIntentPatterns: [
     /can't handle (traffic|load|scale)/i,
@@ -241,9 +239,11 @@ module.exports = {
     /how (do|to).*\b(hire|find|outsource)\b/i,
   ],
   budgetPatterns: [
-    /\$\s?\d+/,
+    /[$€£₹]\s?\d+/,
     /\b\d+\s?\/\s?hr\b/i,
     /\b(budget|paid|paying|compensation|rate|fixed[-\s]?price)\b/i,
+    /\b(usd|eur|gbp|inr)\b/i,
+    /\b(per hour|hourly|day rate|per month|retainer)\b/i,
     /\b(quote|estimate)\b/i,
     /\bhow much\b/i,
   ],
@@ -355,6 +355,6 @@ module.exports = {
     { label: "website", category: "product", pattern: /\bwebsite\b|web\s?site|landing page/i },
     { label: "web development", category: "product", pattern: /web\s?(dev|development|developer|agency)/i },
     // Generic role mention; LLM filters non-dev matches.
-    { label: "software development", category: "general", pattern: /\bsoftware\b|\bdevelopers?\b|\bdev\b|\bengineers?\b|\bengineering\b/i },
+    { label: "software development", category: "general", pattern: /\bsoftware\b|\bdevelopers?\b|\bdev\b|\bengineers?\b|\bengineering\b|\bdevelopment\b/i },
   ],
 };
