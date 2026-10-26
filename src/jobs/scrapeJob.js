@@ -5,10 +5,11 @@ const { connectToChrome } = require("../browser/connection");
 const { scrapeSubredditFull, shuffled, isTargetClosed: isRedditTargetClosed } = require("../scraper/redditScraper");
 const { scrapeXFull, isTargetClosed: isXTargetClosed } = require("../scraper/xScraper");
 const { scrapeLinkedInFull, isTargetClosed: isLinkedInTargetClosed } = require("../scraper/linkedinScraper");
+const { scrapeUpworkFull, isTargetClosed: isUpworkTargetClosed } = require("../scraper/upworkScraper");
 const { analyzePosts, filterLeads, leadScore } = require("../services/matcher");
 const { classifyLeads, llmStatus, getLlmUsage } = require("../services/classifier");
 const { saveResults, saveLeads, loadState, saveState, readJson, writeJson, mergePosts, mergeLeads } = require("../services/store");
-const { notifyLeads, notifyXLeads, notifyLinkedInLeads } = require("../services/discord");
+const { notifyLeads, notifyXLeads, notifyLinkedInLeads, notifyUpworkLeads } = require("../services/discord");
 
 let running = false;
 
@@ -20,8 +21,9 @@ async function runScrapeJob({ reason = "manual", sources } = {}) {
   const wantReddit = sources ? sources.reddit === true : true;
   const wantX = sources ? sources.x === true : Boolean(config.x && config.x.enabled);
   const wantLinkedIn = sources ? sources.linkedin === true : Boolean(config.linkedin && config.linkedin.enabled);
-  if (!wantReddit && !wantX && !wantLinkedIn) {
-    throw new Error("No sources selected (use --reddit, --x, --linkedin or --all)");
+  const wantUpwork = sources ? sources.upwork === true : Boolean(config.upwork && config.upwork.enabled);
+  if (!wantReddit && !wantX && !wantLinkedIn && !wantUpwork) {
+    throw new Error("No sources selected (use --reddit, --x, --linkedin, --upwork or --all)");
   }
   running = true;
   const startedAt = new Date().toISOString();
@@ -29,6 +31,7 @@ async function runScrapeJob({ reason = "manual", sources } = {}) {
   if (wantReddit) sourceNames.push("reddit");
   if (wantX) sourceNames.push("x");
   if (wantLinkedIn) sourceNames.push("linkedin");
+  if (wantUpwork) sourceNames.push("upwork");
   const subs = [];
   if (wantReddit) {
     if (config.subOrder === "full") {
@@ -78,6 +81,20 @@ async function runScrapeJob({ reason = "manual", sources } = {}) {
       } catch (tabErr) {
         console.error(`❌ LinkedIn tab failed to open, LinkedIn falls back to main tab: ${tabErr.message}`);
         linkedinPage = null;
+      }
+    }
+    let upworkPage = null;
+    let upworkKnownUrls = new Set();
+    if (wantUpwork) {
+      upworkKnownUrls = new Set(
+        (await readJson(config.upwork.postsFile, [])).map((p) => p.url).filter(Boolean)
+      );
+      try {
+        upworkPage = await context.newPage();
+        console.log("🗂️  Upwork: opened separate tab");
+      } catch (tabErr) {
+        console.error(`❌ Upwork tab failed to open, Upwork falls back to main tab: ${tabErr.message}`);
+        upworkPage = null;
       }
     }
 
@@ -295,16 +312,80 @@ async function runScrapeJob({ reason = "manual", sources } = {}) {
       };
     }
 
+    async function upworkPipeline() {
+      let targetPage = upworkPage || page;
+      let upworkPosts = [];
+      try {
+        upworkPosts = await scrapeUpworkFull(targetPage, upworkKnownUrls);
+      } catch (err) {
+        if ((err && err.code === "TARGET_CLOSED") || (isUpworkTargetClosed && isUpworkTargetClosed(err))) {
+          console.error("❌ Upwork tab died, retrying on a fresh tab…");
+          try {
+            if (upworkPage) { try { await upworkPage.close(); } catch {} }
+            upworkPage = await context.newPage();
+            targetPage = upworkPage;
+            upworkPosts = await scrapeUpworkFull(targetPage, upworkKnownUrls);
+          } catch (retryErr) {
+            console.error(`❌ Upwork retry failed, other results kept: ${retryErr.message}`);
+            upworkPosts = [];
+          }
+        } else {
+          console.error(`❌ Upwork collection failed, other results kept: ${err.message}`);
+          upworkPosts = [];
+        }
+      } finally {
+        if (upworkPage) {
+          try { await upworkPage.close(); } catch {}
+          console.log("🗂️  Upwork: separate tab closed");
+        }
+      }
+      const upworkAnalyzed = analyzePosts(upworkPosts);
+      const upworkHeuristic = filterLeads(upworkAnalyzed);
+      const upworkFresh = upworkAnalyzed.filter((p) => p.isFresh).length;
+      console.log(`🕒 Upwork freshness: ${upworkFresh}/${upworkPosts.length} posts within ${config.maxLeadAgeDays}d (healthy < ${config.healthyLeadAgeDays}d)`);
+      console.log(`🎯 Upwork heuristic leads: ${upworkHeuristic.length}/${upworkPosts.length}`);
+      const upworkNotifiedUrls = new Set(await readJson(config.upwork.notifiedFile, []));
+      const { leads: upworkLeads, usage } = await withLlmLock(async () => {
+        const l = await classifyLeads(upworkAnalyzed, upworkNotifiedUrls);
+        return { leads: l, usage: getLlmUsage() };
+      });
+      for (const lead of upworkLeads.slice(0, 20)) {
+        console.log(`   ✅ 🧑‍💻 [${lead.grade}|${leadScore(lead)}|${lead.intentType}|${(lead.capabilities || []).join(", ")}] ${lead.clientLocation || "client"} ${String(lead.title || "").slice(0, 110)} — ${lead.url}`);
+      }
+      if (upworkLeads.length > 20) console.log(`   ... +${upworkLeads.length - 20} more`);
+      const prevUpworkAll = await readJson(config.upwork.postsFile, []);
+      const prevUpworkMatched = await readJson(config.upwork.matchedFile, []);
+      const mergedUpworkAll = mergePosts(prevUpworkAll, upworkPosts);
+      const mergedUpworkMatched = mergePosts(prevUpworkMatched, upworkHeuristic);
+      await writeJson(config.upwork.postsFile, mergedUpworkAll);
+      await writeJson(config.upwork.matchedFile, mergedUpworkMatched);
+      const prevUpworkLeads = await readJson(config.upwork.leadsFile, []);
+      const mergedUpworkLeads = mergeLeads(prevUpworkLeads, upworkLeads);
+      await writeJson(config.upwork.leadsFile, mergedUpworkLeads);
+      const upworkQueries = (upworkPosts.length > 0 || upworkHeuristic.length > 0 || upworkLeads.length > 0)
+        ? [...new Set(upworkPosts.map((p) => p.query).filter(Boolean))]
+        : [];
+      const upworkNotify = await notifyUpworkLeads(upworkLeads, { reason, scraped: upworkPosts.length, queries: upworkQueries });
+      return {
+        queries: upworkQueries, scraped: upworkPosts.length, matched: upworkHeuristic.length,
+        leads: upworkLeads.length, totalStored: mergedUpworkAll.length,
+        totalMatchedStored: mergedUpworkMatched.length, totalLeadsStored: mergedUpworkLeads.length,
+        notified: upworkNotify.sent, llmUsage: usage,
+      };
+    }
+
     let redditRes = { allPosts: [], perSub: [], abortedEarly: false, heuristicLeads: [], leads: [], allCount: 0, matchedCount: 0, leadsCount: 0, notified: 0 };
     let xResult = { enabled: wantX, queries: [], scraped: 0, matched: 0, leads: 0, notified: 0 };
     let linkedinResult = { enabled: wantLinkedIn, queries: [], scraped: 0, matched: 0, leads: 0, notified: 0 };
+    let upworkResult = { enabled: wantUpwork, queries: [], scraped: 0, matched: 0, leads: 0, notified: 0 };
     let redditLlmUsage = { calls: 0, promptTokens: 0, completionTokens: 0, totalTokens: 0 };
     let xLlmUsage = { calls: 0, promptTokens: 0, completionTokens: 0, totalTokens: 0 };
     let linkedinLlmUsage = { calls: 0, promptTokens: 0, completionTokens: 0, totalTokens: 0 };
+    let upworkLlmUsage = { calls: 0, promptTokens: 0, completionTokens: 0, totalTokens: 0 };
     if (sourceNames.length > 1) {
       console.log("⚡ Parallel pipelines, each notifies on finish (same channel)");
     }
-    const pipelineFor = { reddit: redditPipeline, x: xPipeline, linkedin: linkedinPipeline };
+    const pipelineFor = { reddit: redditPipeline, x: xPipeline, linkedin: linkedinPipeline, upwork: upworkPipeline };
     const runners = sourceNames.map((name) => pipelineFor[name]);
     const settled = await Promise.allSettled(runners.map((run) => run()));
     let succeeded = 0;
@@ -316,13 +397,15 @@ async function runScrapeJob({ reason = "manual", sources } = {}) {
           console.error("❌ Reddit pipeline failed:", outcome.reason);
           throw outcome.reason;
         }
-        const label = name === "x" ? "𝕏" : "LinkedIn";
+        const label = name === "x" ? "𝕏" : name === "linkedin" ? "LinkedIn" : "Upwork";
         const error = (outcome.reason && outcome.reason.message) || `${name} failed`;
         console.error(`❌ ${label} pipeline failed, other results kept: ${error}`);
         if (name === "x") {
           xResult = { enabled: true, error, queries: [], scraped: 0, matched: 0, leads: 0, notified: 0 };
-        } else {
+        } else if (name === "linkedin") {
           linkedinResult = { enabled: true, error, queries: [], scraped: 0, matched: 0, leads: 0, notified: 0 };
+        } else {
+          upworkResult = { enabled: true, error, queries: [], scraped: 0, matched: 0, leads: 0, notified: 0 };
         }
         continue;
       }
@@ -338,9 +421,16 @@ async function runScrapeJob({ reason = "manual", sources } = {}) {
           leads: value.leads, totalStored: value.totalStored, totalMatchedStored: value.totalMatchedStored,
           totalLeadsStored: value.totalLeadsStored, notified: value.notified,
         };
-      } else {
+      } else if (name === "linkedin") {
         linkedinLlmUsage = value.llmUsage || linkedinLlmUsage;
         linkedinResult = {
+          enabled: true, queries: value.queries, scraped: value.scraped, matched: value.matched,
+          leads: value.leads, totalStored: value.totalStored, totalMatchedStored: value.totalMatchedStored,
+          totalLeadsStored: value.totalLeadsStored, notified: value.notified,
+        };
+      } else {
+        upworkLlmUsage = value.llmUsage || upworkLlmUsage;
+        upworkResult = {
           enabled: true, queries: value.queries, scraped: value.scraped, matched: value.matched,
           leads: value.leads, totalStored: value.totalStored, totalMatchedStored: value.totalMatchedStored,
           totalLeadsStored: value.totalLeadsStored, notified: value.notified,
@@ -352,13 +442,13 @@ async function runScrapeJob({ reason = "manual", sources } = {}) {
     const { allPosts, perSub, abortedEarly, heuristicLeads, leads, allCount, matchedCount, leadsCount, notified } = redditRes;
 
     const combinedLlmUsage = {
-      calls: (redditLlmUsage.calls || 0) + (xLlmUsage.calls || 0) + (linkedinLlmUsage.calls || 0),
-      promptTokens: (redditLlmUsage.promptTokens || 0) + (xLlmUsage.promptTokens || 0) + (linkedinLlmUsage.promptTokens || 0),
-      completionTokens: (redditLlmUsage.completionTokens || 0) + (xLlmUsage.completionTokens || 0) + (linkedinLlmUsage.completionTokens || 0),
-      totalTokens: (redditLlmUsage.totalTokens || 0) + (xLlmUsage.totalTokens || 0) + (linkedinLlmUsage.totalTokens || 0),
+      calls: (redditLlmUsage.calls || 0) + (xLlmUsage.calls || 0) + (linkedinLlmUsage.calls || 0) + (upworkLlmUsage.calls || 0),
+      promptTokens: (redditLlmUsage.promptTokens || 0) + (xLlmUsage.promptTokens || 0) + (linkedinLlmUsage.promptTokens || 0) + (upworkLlmUsage.promptTokens || 0),
+      completionTokens: (redditLlmUsage.completionTokens || 0) + (xLlmUsage.completionTokens || 0) + (linkedinLlmUsage.completionTokens || 0) + (upworkLlmUsage.completionTokens || 0),
+      totalTokens: (redditLlmUsage.totalTokens || 0) + (xLlmUsage.totalTokens || 0) + (linkedinLlmUsage.totalTokens || 0) + (upworkLlmUsage.totalTokens || 0),
     };
-    if (redditLlmUsage.estimatedUsd !== undefined || xLlmUsage.estimatedUsd !== undefined || linkedinLlmUsage.estimatedUsd !== undefined) {
-      combinedLlmUsage.estimatedUsd = Number((((redditLlmUsage.estimatedUsd || 0) + (xLlmUsage.estimatedUsd || 0) + (linkedinLlmUsage.estimatedUsd || 0))).toFixed(4));
+    if (redditLlmUsage.estimatedUsd !== undefined || xLlmUsage.estimatedUsd !== undefined || linkedinLlmUsage.estimatedUsd !== undefined || upworkLlmUsage.estimatedUsd !== undefined) {
+      combinedLlmUsage.estimatedUsd = Number((((redditLlmUsage.estimatedUsd || 0) + (xLlmUsage.estimatedUsd || 0) + (linkedinLlmUsage.estimatedUsd || 0) + (upworkLlmUsage.estimatedUsd || 0))).toFixed(4));
     }
 
     const state = await loadState();
@@ -377,6 +467,7 @@ async function runScrapeJob({ reason = "manual", sources } = {}) {
       notified,
       x: xResult,
       linkedin: linkedinResult,
+      upwork: upworkResult,
       llm: { ...llmStatus(), usage: combinedLlmUsage },
       abortedEarly,
       ok: true,

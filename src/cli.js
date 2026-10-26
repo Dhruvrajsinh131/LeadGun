@@ -2,15 +2,16 @@
 
 const { runScrapeJob } = require("./jobs/scrapeJob");
 
-const SOURCES = ["reddit", "x", "linkedin"];
+const SOURCES = ["reddit", "x", "linkedin", "upwork"];
 
 function usage() {
   return [
-    "Usage: npm run scrape [-- --reddit | --x | --linkedin | --all]",
+    "Usage: npm run scrape [-- --reddit | --x | --linkedin | --upwork | --all]",
     "",
     "  --reddit     Scrape Reddit only",
     "  --x          Scrape X (Twitter) only",
     "  --linkedin   Scrape LinkedIn only",
+    "  --upwork     Scrape Upwork only",
     "  --all        Scrape every source",
     "",
     "No flags: uses the sources enabled in src/config/index.js.",

@@ -18,18 +18,25 @@ const AGENCY_CAPABILITIES = [
 function buildPrompt(post) {
   const isX = post.platform === "x";
   const isLinkedIn = post.platform === "linkedin";
+  const isUpwork = post.platform === "upwork";
   const sourceLine = isX
     ? `X account: @${post.handle || post.author || "?"} (query: "${post.query || "?"}")`
     : isLinkedIn
       ? `LinkedIn author: ${post.handle || post.author || "?"} (query: "${post.query || "?"}")`
-      : `Subreddit: r/${post.subreddit || "?"}`;
+      : isUpwork
+        ? `Upwork client: ${post.clientLocation || post.handle || post.author || "?"} (query: "${post.query || "?"}")`
+        : `Subreddit: r/${post.subreddit || "?"}`;
   const ageLine = post.ageLabel ? `Posted: ${post.ageLabel} (${post.ageDays} days ago)` : "Posted: unknown";
   const body = `Title: ${post.title || ""}\n${sourceLine}\n${ageLine}\nContent: ${(post.content || "").slice(0, 600)}`;
-  const postNoun = isX ? "X post" : isLinkedIn ? "LinkedIn post" : "Reddit post";
+  const postNoun = isX ? "X post" : isLinkedIn ? "LinkedIn post" : isUpwork ? "Upwork job post" : "Reddit post";
+  const platformNote = isUpwork
+    ? "This is an Upwork job posting: the poster is a client offering paid work. Judge the role itself; do not reject it merely for being a job-board listing. A single client job counts as one employer hiring for its own project."
+    : null;
   return [
     "You are a lead qualifier for a software development agency.",
     `Agency capabilities: ${AGENCY_CAPABILITIES}.`,
     `Decide if this ${postNoun} is a sales lead: a BUYER who may pay a developer, freelancer, team, or agency.`,
+    ...(platformNote ? [platformNote] : []),
     "Count INDIRECT intent too (e.g. slow backend, scaling pain, Odoo struggles, RAG needs) when professional work is likely required.",
     "Full-time / direct-hire employment listings (e.g. 'Senior Python Engineer, $3000/month', 'we are hiring...') ARE leads: a company hiring engineers may also buy agency, contract, or staff-augmentation services. Score them by project clarity like any hiring post.",
     "REJECT anyone selling or offering their own services: freelancers advertising, agencies/consultants promoting their services, 'hire me', 'open to work', 'looking for clients/projects', 'I can build X for you', hotlists, bench sales, and vendor/staffing partnerships.",

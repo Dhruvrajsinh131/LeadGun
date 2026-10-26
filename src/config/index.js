@@ -53,6 +53,32 @@ const X_QUERIES = [
   "need help building my SaaS",
 ];
 
+const UPWORK_QUERIES = [
+  "need a developer",
+  "need a development team",
+  "looking for a freelance developer",
+  "need a contract developer",
+  "looking for a developer long term",
+  "need a developer for multiple projects",
+  "development agency",
+  "outsourcing software development",
+  "white label development",
+  "staff augmentation",
+  "build my MVP",
+  "build my SaaS",
+  "need a website built",
+  "website development",
+  "full stack developer",
+  "Next.js developer",
+  "React developer",
+  "Node.js developer",
+  "backend developer",
+  "API developer",
+  "Odoo developer",
+  "AI automation developer",
+  "RAG chatbot developer",
+];
+
 module.exports = {
   cdpUrl: process.env.CDP_URL || "http://127.0.0.1:9222",
   // Auto-launched on demand when the CDP port is closed.
@@ -161,6 +187,21 @@ module.exports = {
     matchedFile: "x_matched.json",
     leadsFile: "x_leads.json",
     notifiedFile: "x_notified.json",
+  },
+  upwork: {
+    enabled: true,
+    queries: UPWORK_QUERIES,
+    searchSuffix: "",
+    sort: "recency",
+    maxQueriesPerRun: 6,
+    maxPosts: 50,
+    searchScrolls: 4,
+    scrollDelayMs: 2000,
+    interPageDelayMs: 12000,
+    postsFile: "upwork_posts.json",
+    matchedFile: "upwork_matched.json",
+    leadsFile: "upwork_leads.json",
+    notifiedFile: "upwork_notified.json",
   },
   directIntentPatterns: [
     /\[hiring\]/i,

@@ -50,16 +50,20 @@ function leadToEmbed(lead) {
   const url = safeUrl(lead.url);
   const isX = lead.platform === "x";
   const isLinkedIn = lead.platform === "linkedin";
+  const isUpwork = lead.platform === "upwork";
   const origin = isX
     ? `𝕏 @${lead.handle || lead.author || "?"} · ${lead.query ? `"${lead.query}"` : lead.source || "x-search"}`
     : isLinkedIn
       ? `💼 ${lead.handle || lead.author || "?"} · ${lead.query ? `"${lead.query}"` : lead.source || "linkedin-search"}`
-      : `📍 r/${lead.subreddit} · ${lead.source || "feed"} · ⬆ ${lead.upvotes ?? 0} · 💬 ${lead.comments ?? 0}`;
+      : isUpwork
+        ? `🧑‍💻 Upwork · ${lead.clientLocation || lead.author || "client"} · ${lead.query ? `"${lead.query}"` : lead.source || "upwork-search"}`
+        : `📍 r/${lead.subreddit} · ${lead.source || "feed"} · ⬆ ${lead.upvotes ?? 0} · 💬 ${lead.comments ?? 0}`;
   const lines = [
     origin,
     `🕒 ${freshnessLabel(lead)}`,
     `🧰 ${(lead.capabilities || []).join(", ") || "general"}`,
   ];
+  if (isUpwork && lead.proposals) lines.push(`📨 ${String(lead.proposals).slice(0, 80)}`);
   if (lead.warm) lines.push("🔥 Red-hot buyer — budget mentioned");
   else if (typeof lead.budget === "string" && lead.budget.trim()) lines.push(`💰 ${lead.budget.trim().slice(0, 120)}`);
   if (url) lines.push(url);
@@ -395,4 +399,51 @@ async function notifyLinkedInLeads(leads, summary) {
   return { sent: sentLeads.length };
 }
 
-module.exports = { isConfigured, leadToEmbed, notifyLeads, notifyXLeads, notifyLinkedInLeads, buildSummary, buildXSummary, buildLinkedInSummary, fitPayload, LIMITS, selectFreshLeads };
+function buildUpworkSummary(fresh, summary) {
+  const reason = RUN_LABELS[summary.reason] || String(summary.reason || "run");
+  const head = `🧑‍💻 **Upwork hunt complete!** Sniffed out **${plural(fresh.length, "fresh lead", "fresh leads")}** from **${plural(summary.scraped, "job", "jobs")}** across **${plural(summary.queries.length, "query", "queries")}** · _${reason}_`;
+  const top = fresh.filter((l) => l.grade === "A").length;
+  const hot = fresh.filter((l) => l.warm).length;
+  const extras = freshnessCounts(fresh);
+  if (top > 0) extras.push(`🔥 ${plural(top, "A-grade", "A-grade")}`);
+  if (hot > 0) extras.push(`💰 ${plural(hot, "red-hot buyer", "red-hot buyers")}`);
+  return extras.length > 0 ? `${head}\n${extras.join(" · ")}` : head;
+}
+
+async function notifyUpworkLeads(leads, summary) {
+  if (!isConfigured()) {
+    console.log("💬 Discord not configured, skipping Upwork notifications.");
+    return { sent: 0, skipped: "not-configured" };
+  }
+  const notifiedFile = (config.upwork && config.upwork.notifiedFile) || "upwork_notified.json";
+  const notified = new Set((await readJson(notifiedFile, [])).map(normalizeUrl).filter(Boolean));
+  const seenThisRun = new Set();
+  const fresh = selectFreshLeads(leads)
+    .filter((l) => {
+      const key = normalizeUrl(l.url);
+      if (notified.has(key) || seenThisRun.has(key)) return false;
+      seenThisRun.add(key);
+      return true;
+    })
+    .slice(0, config.discord.maxLeads);
+  if (fresh.length === 0) {
+    console.log("💬 No new Upwork leads to notify.");
+    return { sent: 0 };
+  }
+  const batches = [];
+  for (let i = 0; i < fresh.length; i += 5) batches.push(fresh.slice(i, i + 5));
+  const payloads = [
+    { content: buildUpworkSummary(fresh, summary) },
+    ...batches.map((group) => ({ embeds: group.map(leadToEmbed) })),
+  ];
+  const results = await sendPayloads(payloads);
+  const sentLeads = batches.filter((_, n) => results[n + 1]).flat();
+  if (sentLeads.length > 0) {
+    for (const l of sentLeads) notified.add(normalizeUrl(l.url));
+    await writeJson(notifiedFile, [...notified].slice(-5000));
+  }
+  console.log(`💬 Notified Discord (Upwork): ${sentLeads.length}/${fresh.length} lead(s).`);
+  return { sent: sentLeads.length };
+}
+
+module.exports = { isConfigured, leadToEmbed, notifyLeads, notifyXLeads, notifyLinkedInLeads, notifyUpworkLeads, buildSummary, buildXSummary, buildLinkedInSummary, buildUpworkSummary, fitPayload, LIMITS, selectFreshLeads };

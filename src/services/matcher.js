@@ -31,6 +31,9 @@ function extractSignals(post) {
   // Hard excludes (sellers/seekers) apply even with direct intent; soft
   // excludes only when there is no direct intent.
   const hardExcluded = (config.hardExcludePatterns || []).some((re) => re.test(text));
+  if (post.platform === "upwork" && !hardExcluded && directIntent.length === 0) {
+    directIntent.push("upwork-job-posting");
+  }
   const excluded = hardExcluded || (directIntent.length === 0 && config.excludePatterns.some((re) => re.test(text)));
   const indirectIntent = excluded ? [] : matchSources(text, config.indirectIntentPatterns);
   const { labels, categories } = excluded

@@ -19,7 +19,8 @@ app.get("/", (req, res) => {
     schedule: config.cronSchedule,
     x: { enabled: Boolean(config.x && config.x.enabled), queries: (config.x && config.x.queries) || [] },
     linkedin: { enabled: Boolean(config.linkedin && config.linkedin.enabled), queries: (config.linkedin && config.linkedin.queries) || [] },
-    endpoints: ["GET /health", "GET /api/status", "GET /api/posts", "GET /api/matched", "GET /api/leads", "POST /api/scrape", "POST /api/notify-test", "GET /api/x/posts", "GET /api/x/matched", "GET /api/x/leads", "GET /api/linkedin/posts", "GET /api/linkedin/matched", "GET /api/linkedin/leads"],
+    upwork: { enabled: Boolean(config.upwork && config.upwork.enabled), queries: (config.upwork && config.upwork.queries) || [] },
+    endpoints: ["GET /health", "GET /api/status", "GET /api/posts", "GET /api/matched", "GET /api/leads", "POST /api/scrape", "POST /api/notify-test", "GET /api/x/posts", "GET /api/x/matched", "GET /api/x/leads", "GET /api/linkedin/posts", "GET /api/linkedin/matched", "GET /api/linkedin/leads", "GET /api/upwork/posts", "GET /api/upwork/matched", "GET /api/upwork/leads"],
   });
 });
 
@@ -35,6 +36,7 @@ app.get("/api/status", async (req, res) => {
     llm: llmStatus(),
     x: { enabled: Boolean(config.x && config.x.enabled), queries: (config.x && config.x.queries) || [] },
     linkedin: { enabled: Boolean(config.linkedin && config.linkedin.enabled), queries: (config.linkedin && config.linkedin.queries) || [] },
+    upwork: { enabled: Boolean(config.upwork && config.upwork.enabled), queries: (config.upwork && config.upwork.queries) || [] },
     ...state,
   });
 });
@@ -116,6 +118,34 @@ app.get("/api/linkedin/leads", async (req, res) => {
   if (minScore) leads = leads.filter((l) => leadScore(l) >= minScore);
   if (query) leads = leads.filter((l) => (l.query || "").toLowerCase() === query);
   if (handle) leads = leads.filter((l) => (l.handle || l.author || "").toLowerCase() === handle);
+  if (capability) leads = leads.filter((l) => (l.capabilities || []).some((c) => String(c).toLowerCase() === capability));
+  if (grade) leads = leads.filter((l) => l.grade === grade);
+  res.json({ count: leads.length, leads: leads.slice(0, limit) });
+});
+
+app.get("/api/upwork/posts", async (req, res) => {
+  const limit = Math.max(1, Math.min(500, parseInt(req.query.limit || "50", 10)));
+  const posts = await readJson(config.upwork.postsFile, []);
+  res.json({ count: posts.length, posts: posts.slice(0, limit) });
+});
+
+app.get("/api/upwork/matched", async (req, res) => {
+  const limit = Math.max(1, Math.min(500, parseInt(req.query.limit || "50", 10)));
+  const posts = await readJson(config.upwork.matchedFile, []);
+  res.json({ count: posts.length, posts: posts.slice(0, limit) });
+});
+
+app.get("/api/upwork/leads", async (req, res) => {
+  const limit = Math.max(1, Math.min(500, parseInt(req.query.limit || "50", 10)));
+  const minScore = parseInt(req.query.minScore || "0", 10);
+  const query = (req.query.query || "").toLowerCase();
+  const location = (req.query.location || "").toLowerCase();
+  const capability = (req.query.capability || "").toLowerCase();
+  const grade = (req.query.grade || "").toUpperCase();
+  let leads = (await readJson(config.upwork.leadsFile, [])).map((l) => withFreshness(l)).filter((l) => isActiveLead(l));
+  if (minScore) leads = leads.filter((l) => leadScore(l) >= minScore);
+  if (query) leads = leads.filter((l) => (l.query || "").toLowerCase() === query);
+  if (location) leads = leads.filter((l) => (l.clientLocation || l.author || "").toLowerCase().includes(location));
   if (capability) leads = leads.filter((l) => (l.capabilities || []).some((c) => String(c).toLowerCase() === capability));
   if (grade) leads = leads.filter((l) => l.grade === grade);
   res.json({ count: leads.length, leads: leads.slice(0, limit) });
