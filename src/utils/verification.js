@@ -91,4 +91,4 @@ async function ensurePageReady(page) {
   return true;
 }
 
-module.exports = { isHumanCheckVisible, waitForHuman, handleVerification, waitForPosts, ensurePageReady };
+module.exports = { isHumanCheckVisible, handleVerification, waitForPosts, ensurePageReady };

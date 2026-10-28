@@ -1,0 +1,144 @@
+generator client {
+  provider = "prisma-client-js"
+  // keep default output into node_modules/.prisma/client
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id             String           @id @default(cuid())
+  email          String?          @unique
+  name           String?
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
+  conversations  ChatConversation[]
+}
+
+model Lead {
+  id              String           @id @default(cuid())
+  externalId      String?
+  name            String?
+  username        String?
+  profileUrl      String?
+  platform        String
+  company         String?
+  title           String?
+  jobTitle        String?
+  postContent     String?
+  postUrl         String           @unique
+  postedAt        DateTime?
+  discoveredAt    DateTime?
+  leadScore       Int?
+  status          String           @default("new")
+  isSaved         Boolean          @default(false)
+  isArchived      Boolean          @default(false)
+  intentType      String?
+  grade           String?
+  heuristicScore  Int?
+  capabilities    String[]         @default([])
+  budget          String?
+  reasoning       String?
+  source          String?
+  query           String?
+  upvotes         Int?             @default(0)
+  comments        Int?             @default(0)
+  clientLocation  String?
+  skills          String[]         @default([])
+  proposals       String?
+  jobType         String?
+  experienceLevel String?
+  duration        String?
+  isWarm          Boolean          @default(false)
+  classifiedBy    String?
+  ageMs           Float?
+  ageDays         Float?
+  ageLabel        String?
+  isFresh         Boolean?
+  isHealthy       Boolean?
+  freshness       String?
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+
+  activities      LeadActivity[]
+  outreach        Outreach[]
+
+  @@index([platform])
+  @@index([status])
+  @@index([discoveredAt])
+  @@index([leadScore])
+  @@index([isSaved])
+}
+
+model ChatConversation {
+  id        String        @id @default(cuid())
+  userId    String?
+  title     String?
+  createdAt DateTime      @default(now())
+  updatedAt DateTime      @updatedAt
+  user      User?         @relation(fields: [userId], references: [id])
+  messages  ChatMessage[]
+
+  @@index([userId])
+  @@index([createdAt])
+}
+
+model ChatMessage {
+  id             String           @id @default(cuid())
+  conversationId String
+  role           String
+  content        String
+  createdAt      DateTime         @default(now())
+  conversation   ChatConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@index([conversationId])
+  @@index([createdAt])
+}
+
+model LeadActivity {
+  id          String   @id @default(cuid())
+  leadId      String
+  activityType String
+  description String?
+  createdAt   DateTime @default(now())
+  lead        Lead     @relation(fields: [leadId], references: [id], onDelete: Cascade)
+
+  @@index([leadId])
+  @@index([createdAt])
+}
+
+model Outreach {
+  id            String   @id @default(cuid())
+  leadId        String
+  platform      String
+  messageContent String
+  direction     String
+  status        String   @default("draft")
+  sentAt        DateTime?
+  repliedAt     DateTime?
+  createdAt     DateTime @default(now())
+  lead          Lead     @relation(fields: [leadId], references: [id], onDelete: Cascade)
+
+  @@index([leadId])
+  @@index([status])
+  @@index([createdAt])
+}
+
+model ScrapeJob {
+  id             String   @id @default(cuid())
+  conversationId String?
+  status         String   @default("started")
+  sources        String[] @default([])
+  keywords       String[] @default([])
+  leadIds        String[] @default([])
+  output         String?
+  error          String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@index([conversationId])
+  @@index([createdAt])
+}
+

@@ -125,4 +125,4 @@ function freshnessFor(post, now = Date.now()) {
   };
 }
 
-module.exports = { parseRelativeAge, ageMsFor, formatAge, freshnessFor };
+module.exports = { freshnessFor };

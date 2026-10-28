@@ -6,16 +6,29 @@
   "scripts": {
     "start": "node src/server.js",
     "scrape": "node src/cli.js",
-    "dev": "node src/server.js --no-scrape"
+    "dev": "concurrently -k -n backend,ui \"node src/server.js --no-scrape\" \"npm --prefix web run dev\"",
+    "dev:scrape": "concurrently -k -n backend,ui \"node src/server.js\" \"npm --prefix web run dev\""
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "type": "commonjs",
   "dependencies": {
+    "@openai/agents": "^0.21.0",
+    "@prisma/client": "^6.19.3",
+    "concurrently": "^10.0.6",
+    "cors": "^2.8.6",
     "dotenv": "^18.0.5",
     "express": "^4.19.2",
     "node-cron": "^3.0.3",
-    "playwright": "^1.63.0"
+    "openai": "^7.43.0",
+    "playwright": "^1.63.0",
+    "prisma": "^6.19.3",
+    "zod": "^4.6.7"
+  },
+  "allowScripts": {
+    "@prisma/client@6.19.3": true,
+    "@prisma/engines@6.19.3": true,
+    "prisma@6.19.3": true
   }
 }

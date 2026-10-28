@@ -57,4 +57,4 @@ async function ensureChrome() {
   );
 }
 
-module.exports = { ensureChrome, isCdpUp, chromeArgs };
+module.exports = { ensureChrome };

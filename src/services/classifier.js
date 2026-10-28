@@ -200,4 +200,4 @@ function llmStatus() {
   return { enabled: config.llm.enabled, configured: Boolean(config.llm.apiKey), model: config.llm.model };
 }
 
-module.exports = { classifyPost, classifyLeads, llmStatus, getLlmUsage };
+module.exports = { classifyLeads, llmStatus, getLlmUsage };

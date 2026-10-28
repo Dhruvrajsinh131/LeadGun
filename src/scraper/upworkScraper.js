@@ -400,17 +400,4 @@ async function scrapeUpworkFull(page, knownUrls) {
   return merged;
 }
 
-module.exports = {
-  upworkSearchUrl,
-  queriesForRun,
-  upworkJobId,
-  upworkPostKey,
-  isTargetClosed,
-  isUpworkLoginWallVisible,
-  ensureUpworkPageReady,
-  collectJobs,
-  scrollToLoadJobs,
-  scrapeUpworkSearch,
-  scrapeUpworkFull,
-  mergeUpworkByKey,
-};
+module.exports = { scrapeUpworkFull, isTargetClosed };

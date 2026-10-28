@@ -73,8 +73,8 @@ function leadScore(lead) {
 }
 
 function analyzePost(post) {
-  // Drop previous verdict fields so a re-analysis is always fresh.
-  const { score, grade, classifiedBy, reasoning, budget, llmError, warm, freshness, ageMs, ageDays, ageLabel, isFresh, isHealthy, ...fresh } = post;
+  const fresh = { ...post };
+  for (const key of ["score", "grade", "classifiedBy", "reasoning", "budget", "llmError", "warm", "freshness", "ageMs", "ageDays", "ageLabel", "isFresh", "isHealthy"]) delete fresh[key];
   const signals = extractSignals(fresh);
   const freshnessInfo = freshnessFor(fresh);
   const heuristic = heuristicScore(signals, fresh);
@@ -114,4 +114,4 @@ function filterLeads(analyzed) {
     .sort((a, b) => (Number(b.warm) - Number(a.warm)) || (b.heuristicScore - a.heuristicScore));
 }
 
-module.exports = { extractSignals, heuristicScore, gradeFor, leadScore, analyzePost, analyzePosts, filterLeads, isHardExcluded };
+module.exports = { gradeFor, leadScore, analyzePosts, filterLeads, isHardExcluded };
