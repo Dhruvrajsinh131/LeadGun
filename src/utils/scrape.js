@@ -1,6 +1,5 @@
 "use strict";
 
-// Shared scrape helpers for both scrapers.
 
 const config = require("../config");
 

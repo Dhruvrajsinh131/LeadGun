@@ -273,16 +273,4 @@ async function scrapeXFull(page, knownUrls) {
   return merged;
 }
 
-module.exports = {
-  xSearchUrl,
-  queriesForRun,
-  xPostKey,
-  isTargetClosed,
-  isXLoginWallVisible,
-  ensureXPageReady,
-  collectTweets,
-  scrollToLoadTweets,
-  scrapeXSearch,
-  scrapeXFull,
-  mergeXByUrl,
-};
+module.exports = { scrapeXFull, isTargetClosed };

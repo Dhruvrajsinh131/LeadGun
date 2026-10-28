@@ -151,13 +151,12 @@ module.exports = {
   },
   llm: {
     enabled: true,
-    apiKey: (process.env.LLM_API_KEY || "").trim(),
+    apiKey: (process.env.OPENAI_API_KEY || "").trim(),
     baseUrl: "https://api.openai.com/v1",
     model: "gpt-4o-mini",
     timeoutMs: 30000,
     maxCallsPerRun: 30,
   },
-  // LinkedIn lead source.
   linkedin: {
     enabled: true,
     queries: LINKEDIN_QUERIES,
@@ -173,7 +172,6 @@ module.exports = {
     leadsFile: "linkedin_leads.json",
     notifiedFile: "linkedin_notified.json",
   },
-  // X (Twitter) lead source.
   x: {
     enabled: true,
     queries: X_QUERIES,

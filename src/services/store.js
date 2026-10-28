@@ -107,4 +107,4 @@ async function saveState(state) {
   await writeJson(config.stateFile, state);
 }
 
-module.exports = { ensureDataDir, readJson, writeJson, mergePosts, mergeLeads, saveResults, saveLeads, loadState, saveState, normalizeUrl, withFreshness, isFreshLead, isActiveLead };
+module.exports = { ensureDataDir, readJson, writeJson, mergePosts, mergeLeads, saveResults, saveLeads, loadState, saveState, normalizeUrl, withFreshness, isActiveLead };

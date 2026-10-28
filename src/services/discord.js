@@ -314,7 +314,6 @@ function buildXSummary(fresh, summary) {
   return extras.length > 0 ? `${head}\n${extras.join(" · ")}` : head;
 }
 
-// Same as notifyLeads, with the separate x_notified file.
 async function notifyXLeads(leads, summary) {
   if (!isConfigured()) {
     console.log("💬 Discord not configured, skipping X notifications.");
@@ -362,7 +361,6 @@ function buildLinkedInSummary(fresh, summary) {
   return extras.length > 0 ? `${head}\n${extras.join(" · ")}` : head;
 }
 
-// Same as notifyLeads, with the separate linkedin_notified file.
 async function notifyLinkedInLeads(leads, summary) {
   if (!isConfigured()) {
     console.log("💬 Discord not configured, skipping LinkedIn notifications.");
@@ -446,4 +444,4 @@ async function notifyUpworkLeads(leads, summary) {
   return { sent: sentLeads.length };
 }
 
-module.exports = { isConfigured, leadToEmbed, notifyLeads, notifyXLeads, notifyLinkedInLeads, notifyUpworkLeads, buildSummary, buildXSummary, buildLinkedInSummary, buildUpworkSummary, fitPayload, LIMITS, selectFreshLeads };
+module.exports = { notifyLeads, notifyXLeads, notifyLinkedInLeads, notifyUpworkLeads };

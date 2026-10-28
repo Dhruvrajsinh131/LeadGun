@@ -2,7 +2,8 @@
 
 const config = require("../config");
 const { connectToChrome } = require("../browser/connection");
-const { scrapeSubredditFull, shuffled, isTargetClosed: isRedditTargetClosed } = require("../scraper/redditScraper");
+const { scrapeSubredditFull, isTargetClosed: isRedditTargetClosed } = require("../scraper/redditScraper");
+const { shuffled } = require("../utils/scrape");
 const { scrapeXFull, isTargetClosed: isXTargetClosed } = require("../scraper/xScraper");
 const { scrapeLinkedInFull, isTargetClosed: isLinkedInTargetClosed } = require("../scraper/linkedinScraper");
 const { scrapeUpworkFull, isTargetClosed: isUpworkTargetClosed } = require("../scraper/upworkScraper");
@@ -10,23 +11,76 @@ const { analyzePosts, filterLeads, leadScore } = require("../services/matcher");
 const { classifyLeads, llmStatus, getLlmUsage } = require("../services/classifier");
 const { saveResults, saveLeads, loadState, saveState, readJson, writeJson, mergePosts, mergeLeads } = require("../services/store");
 const { notifyLeads, notifyXLeads, notifyLinkedInLeads, notifyUpworkLeads } = require("../services/discord");
+const { normalizeScrapeKeywords } = require("../services/queryRewriter");
+const { getScraperSettings } = require("../services/scraperSettings");
+
 
 let running = false;
 
-async function runScrapeJob({ reason = "manual", sources } = {}) {
+
+async function pushLeadsToUi(leads) {
+  const url = process.env.INGEST_URL || "http://127.0.0.1:3000/api/ingest/leads";
+  const secret = process.env.INGEST_SECRET || "";
+  if (!Array.isArray(leads) || leads.length === 0) return;
+  try {
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-ingest-secret": secret },
+      body: JSON.stringify({ leads }),
+    });
+    const text = await res.text();
+    console.log(`📥 UI ingest: ${res.status} ${text.slice(0, 200)}`);
+  } catch (err) {
+    console.error(`📥 UI ingest failed: ${err && err.message ? err.message : err}`);
+  }
+}
+
+async function runScrapeJob({ reason = "manual", sources, keywords } = {}) {
   if (running) {
     console.log("⏭️  Scrape already running, skipping.");
     return { skipped: true };
   }
-  const wantReddit = sources ? sources.reddit === true : true;
-  const wantX = sources ? sources.x === true : Boolean(config.x && config.x.enabled);
-  const wantLinkedIn = sources ? sources.linkedin === true : Boolean(config.linkedin && config.linkedin.enabled);
-  const wantUpwork = sources ? sources.upwork === true : Boolean(config.upwork && config.upwork.enabled);
+  const enabled = await getScraperSettings();
+  const requested = {
+    reddit: sources ? sources.reddit === true : true,
+    x: sources ? sources.x === true : true,
+    linkedin: sources ? sources.linkedin === true : true,
+    upwork: sources ? sources.upwork === true : true,
+  };
+  const wantReddit = requested.reddit && enabled.reddit;
+  const wantX = requested.x && enabled.x;
+  const wantLinkedIn = requested.linkedin && enabled.linkedin;
+  const wantUpwork = requested.upwork && enabled.upwork;
+  const skipped = Object.keys(requested).filter((source) => requested[source] && !enabled[source]);
+  if (skipped.length > 0) console.log(`⏸️  Disabled in Settings: ${skipped.join(", ")}`);
   if (!wantReddit && !wantX && !wantLinkedIn && !wantUpwork) {
-    throw new Error("No sources selected (use --reddit, --x, --linkedin, --upwork or --all)");
+    const explicit = Boolean(sources && Object.values(sources).some((value) => value === true));
+    if (!explicit) {
+      console.log("⏸️  Scrape skipped — all sources are disabled in Settings.");
+      return { skipped: true, reason: "all-disabled" };
+    }
+    throw new Error("Selected sources are disabled in Settings.");
   }
   running = true;
   const startedAt = new Date().toISOString();
+
+
+  const rawKeywords = (Array.isArray(keywords) && keywords.length > 0)
+    ? keywords
+    : (process.env.SCRAPER_KEYWORDS || process.env.LEAD_KEYWORDS || "").split(",");
+  const effectiveKeywords = normalizeScrapeKeywords(rawKeywords);
+  if (effectiveKeywords.length > 0) {
+    config.searchQueries = effectiveKeywords;
+    if (config.x) config.x.queries = effectiveKeywords;
+    if (config.linkedin) config.linkedin.queries = effectiveKeywords;
+    if (config.upwork) config.upwork.queries = effectiveKeywords;
+    if (config.subredditQueries) {
+      const map = {};
+      for (const sub of config.subreddits) map[sub.name] = effectiveKeywords;
+      config.subredditQueries = map;
+    }
+    console.log(`🔑 Dynamic keywords: ${effectiveKeywords.join(", ")}`);
+  }
   const sourceNames = [];
   if (wantReddit) sourceNames.push("reddit");
   if (wantX) sourceNames.push("x");
@@ -161,7 +215,6 @@ async function runScrapeJob({ reason = "manual", sources } = {}) {
       return { allPosts, perSub, abortedEarly };
     }
 
-    // Reddit pipeline: scrape → classify → save → notify.
     async function redditPipeline() {
       const { allPosts, perSub, abortedEarly } = await collectReddit();
       const analyzed = analyzePosts(allPosts);
@@ -180,11 +233,11 @@ async function runScrapeJob({ reason = "manual", sources } = {}) {
       if (leads.length > 20) console.log(`   ... +${leads.length - 20} more`);
       const { allCount, matchedCount } = await saveResults(allPosts, heuristicLeads);
       const { leadsCount } = await saveLeads(leads);
+      await pushLeadsToUi(leads);
       const notifyResult = await notifyLeads(leads, { reason, scraped: allPosts.length, subreddits: perSub });
       return { allPosts, perSub, abortedEarly, heuristicLeads, leads, allCount, matchedCount, leadsCount, notified: notifyResult.sent, llmUsage: usage };
     }
 
-    // X pipeline: scrape → classify → save → notify.
     async function xPipeline() {
       let targetPage = xPage || page;
       let xPosts = [];
@@ -236,6 +289,7 @@ async function runScrapeJob({ reason = "manual", sources } = {}) {
       const prevXLeads = await readJson(config.x.leadsFile, []);
       const mergedXLeads = mergeLeads(prevXLeads, xLeads);
       await writeJson(config.x.leadsFile, mergedXLeads);
+      await pushLeadsToUi(xLeads);
       const xQueries = (xPosts.length > 0 || xHeuristic.length > 0 || xLeads.length > 0)
         ? [...new Set(xPosts.map((p) => p.query).filter(Boolean))]
         : [];
@@ -248,7 +302,6 @@ async function runScrapeJob({ reason = "manual", sources } = {}) {
       };
     }
 
-    // LinkedIn pipeline: scrape → classify → save → notify.
     async function linkedinPipeline() {
       let targetPage = linkedinPage || page;
       let linkedinPosts = [];
@@ -300,6 +353,7 @@ async function runScrapeJob({ reason = "manual", sources } = {}) {
       const prevLinkedInLeads = await readJson(config.linkedin.leadsFile, []);
       const mergedLinkedInLeads = mergeLeads(prevLinkedInLeads, linkedinLeads);
       await writeJson(config.linkedin.leadsFile, mergedLinkedInLeads);
+      await pushLeadsToUi(linkedinLeads);
       const linkedinQueries = (linkedinPosts.length > 0 || linkedinHeuristic.length > 0 || linkedinLeads.length > 0)
         ? [...new Set(linkedinPosts.map((p) => p.query).filter(Boolean))]
         : [];
@@ -362,6 +416,7 @@ async function runScrapeJob({ reason = "manual", sources } = {}) {
       const prevUpworkLeads = await readJson(config.upwork.leadsFile, []);
       const mergedUpworkLeads = mergeLeads(prevUpworkLeads, upworkLeads);
       await writeJson(config.upwork.leadsFile, mergedUpworkLeads);
+      await pushLeadsToUi(upworkLeads);
       const upworkQueries = (upworkPosts.length > 0 || upworkHeuristic.length > 0 || upworkLeads.length > 0)
         ? [...new Set(upworkPosts.map((p) => p.query).filter(Boolean))]
         : [];
@@ -473,6 +528,12 @@ async function runScrapeJob({ reason = "manual", sources } = {}) {
       ok: true,
     };
     await saveState({ lastRun: result.finishedAt, lastResult: result, runCount: (state.runCount || 0) + 1 });
+    const url = process.env.WEBHOOK_URL || "http://127.0.0.1:3000/api/webhooks/scrape-complete";
+    const secret = process.env.INGEST_SECRET || "";
+    try {
+      const summary = { reason, sources: sourceNames, leadsCount: leads.length, linkedin: linkedinResult, x: xResult, upwork: upworkResult, redditLeads: leads.length };
+      await fetch(url, { method: "POST", headers: { "Content-Type": "application/json", "x-ingest-secret": secret }, body: JSON.stringify(summary) });
+    } catch (err) { console.error("🔔 Webhook notify failed:", err && err.message ? err.message : err); }
     console.log("💾 Saved. Job done.");
     return result;
   } catch (err) {
@@ -480,6 +541,11 @@ async function runScrapeJob({ reason = "manual", sources } = {}) {
     const state = await loadState();
     const result = { startedAt, finishedAt: new Date().toISOString(), reason, ok: false, error: err.message };
     await saveState({ lastRun: result.finishedAt, lastResult: result, runCount: state.runCount || 0 });
+    try {
+      const url = process.env.WEBHOOK_URL || "http://127.0.0.1:3000/api/webhooks/scrape-complete";
+      const secret = process.env.INGEST_SECRET || "";
+      await fetch(url, { method: "POST", headers: { "Content-Type": "application/json", "x-ingest-secret": secret }, body: JSON.stringify({ ok: false, error: err.message, reason }) });
+    } catch {}
     return result;
   } finally {
     running = false;

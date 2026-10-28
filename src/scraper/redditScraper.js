@@ -198,4 +198,4 @@ async function scrapeSubredditFull(page, subreddit, knownUrls) {
   return posts;
 }
 
-module.exports = { openSubreddit, scrollToLoadAll, collectPosts, extractPosts, scrapeSubreddit, scrapeSearch, scrapeSubredditFull, searchUrl, queriesForSub, shuffled, postKey, mergeByUrl, isTargetClosed };
+module.exports = { scrapeSubredditFull, isTargetClosed };

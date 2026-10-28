@@ -1,30 +1,37 @@
 "use strict";
 
+require("dotenv").config({ quiet: true });
+
 const express = require("express");
+const cors = require("cors");
+const { register: registerApi } = require("./routes/api");
+const fs = require("fs");
+const { spawnSync } = require("child_process");
 const cron = require("node-cron");
 const config = require("./config");
 const { runScrapeJob, isRunning } = require("./jobs/scrapeJob");
-const { readJson, loadState, ensureDataDir, withFreshness, isActiveLead } = require("./services/store");
-const { leadScore } = require("./services/matcher");
+const { loadState, ensureDataDir } = require("./services/store");
 const { llmStatus } = require("./services/classifier");
-const { notifyLeads } = require("./services/discord");
+const { getScraperSettings } = require("./services/scraperSettings");
 
 const app = express();
-app.use(express.json());
+app.use(express.json({ limit: "50mb" }));
+app.use(cors({ origin: true, credentials: true, exposedHeaders: ["X-Conversation-Id"] }));
+registerApi(app);
 
 app.get("/", (req, res) => {
   res.json({
     service: "reddit-lead-agent",
     subreddits: config.subreddits,
     schedule: config.cronSchedule,
+    reddit: { enabled: Boolean(config.reddit && config.reddit.enabled) },
     x: { enabled: Boolean(config.x && config.x.enabled), queries: (config.x && config.x.queries) || [] },
     linkedin: { enabled: Boolean(config.linkedin && config.linkedin.enabled), queries: (config.linkedin && config.linkedin.queries) || [] },
     upwork: { enabled: Boolean(config.upwork && config.upwork.enabled), queries: (config.upwork && config.upwork.queries) || [] },
-    endpoints: ["GET /health", "GET /api/status", "GET /api/posts", "GET /api/matched", "GET /api/leads", "POST /api/scrape", "POST /api/notify-test", "GET /api/x/posts", "GET /api/x/matched", "GET /api/x/leads", "GET /api/linkedin/posts", "GET /api/linkedin/matched", "GET /api/linkedin/leads", "GET /api/upwork/posts", "GET /api/upwork/matched", "GET /api/upwork/leads"],
+    endpoints: ["GET /health", "GET /api/status", "GET /api/leads", "POST /api/ingest/leads", "POST /api/scrape", "GET /api/scrape/jobs", "GET /api/stats", "POST /api/chat", "GET /api/events", "GET /api/scrapers", "POST /api/webhooks/scrape-complete"],
   });
 });
 
-app.get("/health", (req, res) => res.json({ ok: true, time: new Date().toISOString() }));
 
 app.get("/api/status", async (req, res) => {
   const state = await loadState();
@@ -34,6 +41,7 @@ app.get("/api/status", async (req, res) => {
     subreddits: config.subreddits,
     capabilities: config.capabilities.map((k) => k.label),
     llm: llmStatus(),
+    reddit: { enabled: Boolean(config.reddit && config.reddit.enabled) },
     x: { enabled: Boolean(config.x && config.x.enabled), queries: (config.x && config.x.queries) || [] },
     linkedin: { enabled: Boolean(config.linkedin && config.linkedin.enabled), queries: (config.linkedin && config.linkedin.queries) || [] },
     upwork: { enabled: Boolean(config.upwork && config.upwork.enabled), queries: (config.upwork && config.upwork.queries) || [] },
@@ -41,132 +49,26 @@ app.get("/api/status", async (req, res) => {
   });
 });
 
-app.get("/api/posts", async (req, res) => {
-  const limit = Math.max(1, Math.min(500, parseInt(req.query.limit || "50", 10)));
-  const posts = await readJson(config.allPostsFile, []);
-  res.json({ count: posts.length, posts: posts.slice(0, limit) });
-});
-
-app.get("/api/matched", async (req, res) => {
-  const limit = Math.max(1, Math.min(500, parseInt(req.query.limit || "50", 10)));
-  const posts = await readJson(config.matchedPostsFile, []);
-  res.json({ count: posts.length, posts: posts.slice(0, limit) });
-});
-
-app.get("/api/leads", async (req, res) => {
-  const limit = Math.max(1, Math.min(500, parseInt(req.query.limit || "50", 10)));
-  const minScore = parseInt(req.query.minScore || "0", 10);
-  const subreddit = (req.query.subreddit || "").toLowerCase();
-  const capability = (req.query.capability || "").toLowerCase();
-  const grade = (req.query.grade || "").toUpperCase();
-  let leads = (await readJson(config.leadsFile, [])).map((l) => withFreshness(l)).filter((l) => isActiveLead(l));
-  if (minScore) leads = leads.filter((l) => leadScore(l) >= minScore);
-  if (subreddit) leads = leads.filter((l) => (l.subreddit || "").toLowerCase() === subreddit);
-  if (capability) leads = leads.filter((l) => (l.capabilities || []).some((c) => String(c).toLowerCase() === capability));
-  if (grade) leads = leads.filter((l) => l.grade === grade);
-  res.json({ count: leads.length, leads: leads.slice(0, limit) });
-});
-
-app.get("/api/x/posts", async (req, res) => {
-  const limit = Math.max(1, Math.min(500, parseInt(req.query.limit || "50", 10)));
-  const posts = await readJson(config.x.postsFile, []);
-  res.json({ count: posts.length, posts: posts.slice(0, limit) });
-});
-
-app.get("/api/x/matched", async (req, res) => {
-  const limit = Math.max(1, Math.min(500, parseInt(req.query.limit || "50", 10)));
-  const posts = await readJson(config.x.matchedFile, []);
-  res.json({ count: posts.length, posts: posts.slice(0, limit) });
-});
-
-app.get("/api/x/leads", async (req, res) => {
-  const limit = Math.max(1, Math.min(500, parseInt(req.query.limit || "50", 10)));
-  const minScore = parseInt(req.query.minScore || "0", 10);
-  const query = (req.query.query || "").toLowerCase();
-  const handle = (req.query.handle || "").toLowerCase();
-  const capability = (req.query.capability || "").toLowerCase();
-  const grade = (req.query.grade || "").toUpperCase();
-  let leads = (await readJson(config.x.leadsFile, [])).map((l) => withFreshness(l)).filter((l) => isActiveLead(l));
-  if (minScore) leads = leads.filter((l) => leadScore(l) >= minScore);
-  if (query) leads = leads.filter((l) => (l.query || "").toLowerCase() === query);
-  if (handle) leads = leads.filter((l) => (l.handle || l.author || "").toLowerCase() === handle);
-  if (capability) leads = leads.filter((l) => (l.capabilities || []).some((c) => String(c).toLowerCase() === capability));
-  if (grade) leads = leads.filter((l) => l.grade === grade);
-  res.json({ count: leads.length, leads: leads.slice(0, limit) });
-});
-
-app.get("/api/linkedin/posts", async (req, res) => {
-  const limit = Math.max(1, Math.min(500, parseInt(req.query.limit || "50", 10)));
-  const posts = await readJson(config.linkedin.postsFile, []);
-  res.json({ count: posts.length, posts: posts.slice(0, limit) });
-});
-
-app.get("/api/linkedin/matched", async (req, res) => {
-  const limit = Math.max(1, Math.min(500, parseInt(req.query.limit || "50", 10)));
-  const posts = await readJson(config.linkedin.matchedFile, []);
-  res.json({ count: posts.length, posts: posts.slice(0, limit) });
-});
-
-app.get("/api/linkedin/leads", async (req, res) => {
-  const limit = Math.max(1, Math.min(500, parseInt(req.query.limit || "50", 10)));
-  const minScore = parseInt(req.query.minScore || "0", 10);
-  const query = (req.query.query || "").toLowerCase();
-  const handle = (req.query.handle || "").toLowerCase();
-  const capability = (req.query.capability || "").toLowerCase();
-  const grade = (req.query.grade || "").toUpperCase();
-  let leads = (await readJson(config.linkedin.leadsFile, [])).map((l) => withFreshness(l)).filter((l) => isActiveLead(l));
-  if (minScore) leads = leads.filter((l) => leadScore(l) >= minScore);
-  if (query) leads = leads.filter((l) => (l.query || "").toLowerCase() === query);
-  if (handle) leads = leads.filter((l) => (l.handle || l.author || "").toLowerCase() === handle);
-  if (capability) leads = leads.filter((l) => (l.capabilities || []).some((c) => String(c).toLowerCase() === capability));
-  if (grade) leads = leads.filter((l) => l.grade === grade);
-  res.json({ count: leads.length, leads: leads.slice(0, limit) });
-});
-
-app.get("/api/upwork/posts", async (req, res) => {
-  const limit = Math.max(1, Math.min(500, parseInt(req.query.limit || "50", 10)));
-  const posts = await readJson(config.upwork.postsFile, []);
-  res.json({ count: posts.length, posts: posts.slice(0, limit) });
-});
-
-app.get("/api/upwork/matched", async (req, res) => {
-  const limit = Math.max(1, Math.min(500, parseInt(req.query.limit || "50", 10)));
-  const posts = await readJson(config.upwork.matchedFile, []);
-  res.json({ count: posts.length, posts: posts.slice(0, limit) });
-});
-
-app.get("/api/upwork/leads", async (req, res) => {
-  const limit = Math.max(1, Math.min(500, parseInt(req.query.limit || "50", 10)));
-  const minScore = parseInt(req.query.minScore || "0", 10);
-  const query = (req.query.query || "").toLowerCase();
-  const location = (req.query.location || "").toLowerCase();
-  const capability = (req.query.capability || "").toLowerCase();
-  const grade = (req.query.grade || "").toUpperCase();
-  let leads = (await readJson(config.upwork.leadsFile, [])).map((l) => withFreshness(l)).filter((l) => isActiveLead(l));
-  if (minScore) leads = leads.filter((l) => leadScore(l) >= minScore);
-  if (query) leads = leads.filter((l) => (l.query || "").toLowerCase() === query);
-  if (location) leads = leads.filter((l) => (l.clientLocation || l.author || "").toLowerCase().includes(location));
-  if (capability) leads = leads.filter((l) => (l.capabilities || []).some((c) => String(c).toLowerCase() === capability));
-  if (grade) leads = leads.filter((l) => l.grade === grade);
-  res.json({ count: leads.length, leads: leads.slice(0, limit) });
-});
-
-app.post("/api/scrape", async (req, res) => {
-  if (isRunning()) return res.status(429).json({ ok: false, error: "scrape already running" });
-  runScrapeJob({ reason: "api" });
-  res.json({ ok: true, message: "scrape started" });
-});
-
-app.post("/api/notify-test", async (req, res) => {
-  const result = await notifyLeads(
-    [{ title: "Test lead (ignore)", subreddit: "forhire", source: "test", capabilities: ["node.js"], grade: "A", heuristicScore: 99, intentType: "direct", classifiedBy: "test", createdAt: new Date().toISOString(), url: `https://www.reddit.com/r/forhire/?test=${Date.now()}` }],
-    { reason: "test", scraped: 0, subreddits: [] }
+function ensureDatabase() {
+  const pgdata = process.env.PGDATA || "/home/personal/LeadGun/.pgdata";
+  const pgctl = process.env.PGCTL || "/usr/lib/postgresql/18/bin/pg_ctl";
+  if (!fs.existsSync(pgdata)) return;
+  const result = spawnSync(
+    pgctl,
+    ["-D", pgdata, "-o", "-k /tmp/opencode -p 5433", "-l", `${pgdata}/pg.log`, "start"],
+    { encoding: "utf8" }
   );
-  res.json({ ok: true, ...result });
-});
+  if (result.status !== 0 && !(result.stderr || "").includes("already running")) {
+    console.log("DB start:", (result.stderr || result.stdout || "").slice(0, 200));
+  }
+}
 
 async function start() {
+  ensureDatabase();
   await ensureDataDir();
+  const scraperSettings = await getScraperSettings();
+  const enabledSources = Object.entries(scraperSettings).filter(([, enabled]) => enabled).map(([id]) => id);
+  console.log(`🧩 Scrapers enabled: ${enabledSources.length > 0 ? enabledSources.join(", ") : "none"}`);
 
   if (!cron.validate(config.cronSchedule)) {
     throw new Error(`Invalid CRON schedule: ${config.cronSchedule}`);
@@ -194,5 +96,3 @@ if (require.main === module) {
     process.exit(1);
   });
 }
-
-module.exports = { app, start };
